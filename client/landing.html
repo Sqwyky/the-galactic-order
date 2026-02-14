@@ -670,11 +670,11 @@ const npcManager = new NPCManager(scene, {
 // SHIP + FLIGHT SYSTEMS
 // ============================================================
 
-// Ship model (parked on surface, visible from landing)
+// Ship model — "Voidmoth" Mk-I starter ship
 const shipModel = new ShipModel({
-    hullColor: new THREE.Color(0x556677),
-    accentColor: new THREE.Color(0xcc6633),
-    engineColor: new THREE.Color(0x33ccff),
+    hullColor: new THREE.Color(0x5a6577),
+    accentColor: new THREE.Color(0xb83232),
+    engineColor: new THREE.Color(0x33ddff),
 });
 shipModel.setLandingGear(true);
 shipModel.addToScene(scene);
@@ -1062,7 +1062,7 @@ function onLanded() {
         npcManager.spawnMysteriousBeing();
         tablet.addDiscovery(`Landed on ${planetName}. Surface exploration initiated.`);
         tablet.addDiscovery(`Anomalous energy signature detected nearby...`);
-        tablet.addDiscovery(`Your ship is parked nearby. Press E to board.`);
+        tablet.addDiscovery(`Your ship — Voidmoth Mk-I — is parked nearby. Press E to board.`);
     }, 2000);
 }
 
