@@ -278,9 +278,9 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 // URL PARAMS — planet identity
 // ============================================================
 const params = new URLSearchParams(window.location.search);
-const planetRule = parseInt(params.get('rule')) || 30;
-const planetSeed = parseInt(params.get('seed')) || 42;
-const planetName = params.get('name') || generatePlanetName(hashSeed(planetSeed, 'planet', 0));
+let planetRule = parseInt(params.get('rule')) || 30;
+let planetSeed = parseInt(params.get('seed')) || 42;
+let planetName = params.get('name') || generatePlanetName(hashSeed(planetSeed, 'planet', 0));
 
 // ============================================================
 // LOADING
@@ -456,10 +456,10 @@ setLoading(15, 'Generating atmosphere...');
 
 // Determine atmosphere from Harmonic Resonance system (Antigravity Brain integration)
 // The planet's CA rule → brainwave frequency → mood → sky colors, fog, atmosphere
-const classification = classifyRule(planetRule);
-const planetMood = derivePlanetMood(planetRule, planetSeed);
-const planetFreq = derivePlanetFrequency(planetRule, planetSeed);
-const planetNote = frequencyToNote(planetFreq.frequency);
+let classification = classifyRule(planetRule);
+let planetMood = derivePlanetMood(planetRule, planetSeed);
+let planetFreq = derivePlanetFrequency(planetRule, planetSeed);
+let planetNote = frequencyToNote(planetFreq.frequency);
 
 // Sky colors driven by the planet's resonant frequency band
 const skyTopColor = new THREE.Color(...planetMood.sky.topColor);
@@ -468,8 +468,8 @@ const fogColor = new THREE.Color(...planetMood.sky.fogColor);
 const sunColor = new THREE.Color(...planetMood.sky.sunColor);
 
 // Atmosphere tint for re-entry overlay
-const fc = planetMood.sky.fogColor;
-const atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
+let fc = planetMood.sky.fogColor;
+let atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
 
 console.log(`[TGO] Planet mood: ${planetMood.bandLabel} (${planetMood.moodName}) ` +
     `@ ${planetFreq.frequency.toFixed(2)}Hz (${planetNote.display}) ` +
@@ -477,7 +477,7 @@ console.log(`[TGO] Planet mood: ${planetMood.bandLabel} (${planetMood.moodName})
     (planetMood.isSchumannResonant ? ' ★ RESONANT' : ''));
 
 // Fog density driven by planet mood (Delta = thick fog, Alpha = clear, Gamma = toxic haze)
-const moodFogDensity = planetMood.atmosphere.fogDensity;
+let moodFogDensity = planetMood.atmosphere.fogDensity;
 scene.fog = new THREE.FogExp2(fogColor, moodFogDensity);
 
 // NMS-style gradient sky dome — colors from harmonic resonance system
@@ -575,7 +575,7 @@ composer.addPass(new OutputPass());
 // ============================================================
 setLoading(30, `Generating terrain (Rule ${planetRule})...`);
 
-const terrainManager = new TerrainManager(scene, {
+let terrainManager = new TerrainManager(scene, {
     rule: planetRule,
     seed: planetSeed,
     moistureRule: (planetRule + 73) & 0xFF,
@@ -583,7 +583,7 @@ const terrainManager = new TerrainManager(scene, {
 // Uses TERRAIN_CONFIG defaults (heightScale: 15, waterLevel: 0, etc.)
 
 // NMS-style instanced grass — populates terrain near the camera
-const grassSystem = new GrassSystem(scene, {
+let grassSystem = new GrassSystem(scene, {
     baseColor: new THREE.Color(0x1a5e12), // Dark grass base (fake AO)
     tipColor: new THREE.Color(0x7ec850),  // Bright grass tips (sunlit)
     fogColor: fogColor,
@@ -591,7 +591,7 @@ const grassSystem = new GrassSystem(scene, {
 });
 
 // Scattered rocks — shapes derived from CA rule (supershape rocks)
-const rockScatter = new RockScatter(scene, {
+let rockScatter = new RockScatter(scene, {
     planetRule: planetRule,
     rockSeed: hashSeed(planetSeed, 'rock'),
     rockColor: new THREE.Color(0x8a7d6b), // Fallback color
@@ -600,7 +600,7 @@ const rockScatter = new RockScatter(scene, {
 
 // Alien flora — supershape geometries driven by the planet's CA rule
 // Wind strength from mood (Delta = still, Gamma = strong winds)
-const alienFlora = new AlienFloraSystem(scene, {
+let alienFlora = new AlienFloraSystem(scene, {
     planetRule: planetRule,
     floraSeed: hashSeed(planetSeed, 'flora'),
     fogColor: fogColor,
@@ -613,7 +613,7 @@ const sunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
 terrainManager.createWater(fogColor, sunDir);
 
 // Atmospheric dust/pollen particles — count + speed from planet mood
-const atmosphericParticles = new AtmosphericParticles(scene, {
+let atmosphericParticles = new AtmosphericParticles(scene, {
     color: new THREE.Color(0xddcc99),  // Warm dust motes
     fogColor: fogColor,
     fogDensity: moodFogDensity,
@@ -712,7 +712,7 @@ perfManager.onQualityChanged((tierName, settings) => {
 // ============================================================
 // NPC MANAGER — The Mysterious Being
 // ============================================================
-const npcManager = new NPCManager(scene, {
+let npcManager = new NPCManager(scene, {
     seed: planetSeed,
     rule: planetRule,
 }, (x, z) => terrainManager.getHeightAt(x, z));
@@ -764,6 +764,176 @@ const hyperspaceSystem = new HyperspaceSystem(scene, camera);
 
 // Ship HUD
 const shipHUD = new ShipHUD();
+
+// ============================================================
+// SEAMLESS PLANET TRANSITION — no loading screen, no page reload
+// ============================================================
+// When the player jumps to a new planet via hyperspace, this function
+// disposes the old world and recreates everything with new parameters.
+// The flash overlay hides the transition; descent animation plays on arrival.
+//
+// Flow: FLIGHT → charge → flash → [dispose/recreate] → DESCENT → SURFACE
+
+hyperspaceSystem.onJump = (newRule, newSeed) => transitionToPlanet(newRule, newSeed);
+
+function transitionToPlanet(newRule, newSeed) {
+    // ---- Phase lock: prevent game loop from updating stale systems ----
+    currentPhase = PHASE.DESCENT;
+
+    // ---- Disable all active systems ----
+    walker.disable();
+    miningSystem.disable();
+    flightController.disable();
+    weaponSystem.disable();
+    scannerSystem.disable();
+    hyperspaceSystem.disable();
+    shipHUD.hide();
+    document.getElementById('crosshair').classList.remove('visible');
+    document.getElementById('controls-hint').classList.remove('visible');
+
+    // ---- Dispose planet-specific systems (geometry, materials, meshes) ----
+    terrainManager.dispose();
+    grassSystem.dispose();
+    rockScatter.dispose();
+    alienFlora.dispose();
+    atmosphericParticles.dispose();
+    npcManager.dispose();
+
+    // ---- Update planet identity ----
+    planetRule = newRule;
+    planetSeed = newSeed;
+    planetName = generatePlanetName(hashSeed(planetSeed, 'planet', 0));
+
+    // Update URL so refresh works (no page reload)
+    history.replaceState(null, '', `landing.html?rule=${newRule}&seed=${newSeed}`);
+
+    // ---- Recalculate planet characteristics from CA rule + seed ----
+    classification = classifyRule(planetRule);
+    planetMood = derivePlanetMood(planetRule, planetSeed);
+    planetFreq = derivePlanetFrequency(planetRule, planetSeed);
+    planetNote = frequencyToNote(planetFreq.frequency);
+
+    // ---- Recalculate colors ----
+    skyTopColor.set(...planetMood.sky.topColor);
+    skyBottomColor.set(...planetMood.sky.bottomColor);
+    fogColor.set(...planetMood.sky.fogColor);
+    sunColor.set(...planetMood.sky.sunColor);
+    fc = planetMood.sky.fogColor;
+    atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
+    moodFogDensity = planetMood.atmosphere.fogDensity;
+
+    // ---- Update scene fog ----
+    scene.fog.color.copy(fogColor);
+    scene.fog.density = moodFogDensity;
+
+    // ---- Update sky dome ----
+    skyDome.material.uniforms.uTopColor.value.copy(skyTopColor);
+    skyDome.material.uniforms.uMidColor.value.copy(skyBottomColor);
+    skyDome.material.uniforms.uBottomColor.value.copy(fogColor);
+    skyDome.material.uniforms.uFogColor.value.copy(fogColor);
+    skyDome.material.uniforms.uSunColor.value.copy(sunColor);
+
+    // ---- Update lighting ----
+    sunLight.color.copy(sunColor);
+    ambientLight.color.copy(skyBottomColor);
+    ambientLight.intensity = planetMood.atmosphere.ambientLight;
+    hemiLight.color.copy(skyTopColor);
+    groundFillMat.color.copy(fogColor);
+
+    // ---- Update bloom strength for new planet mood ----
+    perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
+
+    // ---- Recreate terrain (new CA rule + seed = new world) ----
+    terrainManager = new TerrainManager(scene, {
+        rule: planetRule,
+        seed: planetSeed,
+        moistureRule: (planetRule + 73) & 0xFF,
+    });
+    const newSunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
+    terrainManager.createWater(fogColor, newSunDir);
+
+    // ---- Recreate vegetation + environment ----
+    grassSystem = new GrassSystem(scene, {
+        baseColor: new THREE.Color(0x1a5e12),
+        tipColor: new THREE.Color(0x7ec850),
+        fogColor: fogColor,
+        fogDensity: moodFogDensity,
+    });
+
+    rockScatter = new RockScatter(scene, {
+        planetRule: planetRule,
+        rockSeed: hashSeed(planetSeed, 'rock'),
+        rockColor: new THREE.Color(0x8a7d6b),
+        fogColor: fogColor,
+    });
+
+    alienFlora = new AlienFloraSystem(scene, {
+        planetRule: planetRule,
+        floraSeed: hashSeed(planetSeed, 'flora'),
+        fogColor: fogColor,
+        fogDensity: moodFogDensity,
+        windStrength: planetMood.atmosphere.windStrength,
+    });
+
+    // ---- Recreate atmospheric particles ----
+    atmosphericParticles = new AtmosphericParticles(scene, {
+        color: new THREE.Color(0xddcc99),
+        fogColor: fogColor,
+        fogDensity: moodFogDensity,
+        count: planetMood.atmosphere.particleCount,
+    });
+
+    // ---- Recreate NPCs ----
+    npcManager = new NPCManager(scene, {
+        seed: planetSeed,
+        rule: planetRule,
+    }, (x, z) => terrainManager.getHeightAt(x, z));
+
+    // ---- Reset encounter state ----
+    encounterState = 'waiting';
+    beingDialogueIndex = 0;
+
+    // ---- Update tablet with new planet data ----
+    tablet.setPlanetData({
+        name: planetName,
+        rule: planetRule,
+        ruleClass: classification.class,
+        ruleLabel: classification.label,
+        archetype: classification.label,
+        atmosphere: planetMood.moodName.charAt(0).toUpperCase() + planetMood.moodName.slice(1),
+        hazard: planetMood.band === 'gamma' ? 'Extreme' : planetMood.band === 'beta' ? 'Moderate' : 'Low',
+        frequency: `${planetFreq.frequency.toFixed(2)}Hz`,
+        musicalNote: planetNote.display,
+        brainwaveBand: planetMood.bandLabel,
+        mood: planetMood.moodName,
+        schumannResonant: planetMood.isSchumannResonant,
+    });
+    tablet.addDiscovery(`Warped to ${planetName} (Rule ${planetRule}).`, 'discovery');
+
+    // ---- Reset descent state machine ----
+    descentProgress = 0;
+    descentLanded = false;
+    shipGrounded = false;
+
+    // ---- Hide ship during descent (repositioned on landing) ----
+    shipModel.group.visible = false;
+    shipModel.setLandingGear(true);
+
+    // ---- Camera to descent start position ----
+    camera.position.set(0, descentStartHeight, 0);
+    camera.lookAt(0, 0, 0);
+
+    // ---- Fade out flash → descent begins on next frame ----
+    setTimeout(() => {
+        hyperspaceSystem.flashOverlay.style.opacity = '0';
+        hyperspaceSystem.resetJumpState();
+    }, 300);
+
+    console.log(
+        `[TGO] ★ Warped to ${planetName} ` +
+        `(Rule ${planetRule}, Seed ${planetSeed}, ${planetMood.bandLabel} ${planetMood.moodName})`
+    );
+}
 
 // World position helper (for when camera is child of ship)
 const _shipWorldPos = new THREE.Vector3();
@@ -1106,6 +1276,7 @@ function onLanded() {
     const shipZ = camera.position.z + shipSpawnOffset.z;
     const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || groundH;
     shipModel.group.position.set(shipX, shipGroundH + 2.5, shipZ);
+    shipModel.group.visible = true; // Ensure visible after hyperspace warp
     shipGrounded = true;
 
     // Spawn the Mysterious Being
@@ -1133,16 +1304,13 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 let frameCount = 0, lastFpsTime = 0;
 
-setLoading(80, 'Preparing descent...');
+setLoading(100, 'Entering atmosphere...');
 
-// Fade out loading after a short delay
+// Quick fade — the descent animation IS the loading experience
 setTimeout(() => {
-    setLoading(100, 'Entering atmosphere...');
-    setTimeout(() => {
-        loadingEl.classList.add('fade');
-        setTimeout(() => { loadingEl.style.display = 'none'; }, 2000);
-    }, 500);
-}, 1000);
+    loadingEl.classList.add('fade');
+    setTimeout(() => { loadingEl.style.display = 'none'; }, 1200);
+}, 300);
 
 function animate() {
     requestAnimationFrame(animate);
@@ -1356,6 +1524,7 @@ window._debug = {
     get inventory() { return inventory; },
     get perf() { return perfManager; },
     get phase() { return currentPhase; },
+    warpTo: transitionToPlanet,
 };
 
 </script>
