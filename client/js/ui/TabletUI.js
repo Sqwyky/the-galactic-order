@@ -7,10 +7,14 @@
  * - Discovery log
  * - Cipher fragments (found from CA pattern decoding)
  * - The "Key of Insight" input (Gemini API key — provided by the Mysterious Being quest)
+ * - Inventory display (collected elements from mining)
+ * - Refinery (CA Rule Annealing — transform raw materials into refined elements)
  *
  * Aesthetic: Green-on-black terminal, CRT scanlines, typing animation.
  * Inspired by the terminals in Fallout / the Analysis Visor in NMS.
  */
+
+import { ELEMENTS, REFINERY_RECIPES } from '../generation/HarmonicElements.js';
 
 // ============================================================
 // TABLET UI
@@ -21,11 +25,15 @@ export class TabletUI {
      * @param {Object} options
      * @param {Function} [options.onKeySubmit] - Called when player submits the "Key of Insight"
      * @param {Object} [options.planetData] - Current planet info
+     * @param {import('./InventoryManager.js').InventoryManager} [options.inventory] - Inventory manager
+     * @param {number} [options.planetRule] - Current planet's CA rule
      */
     constructor(options = {}) {
         this.isOpen = false;
         this.onKeySubmit = options.onKeySubmit || null;
         this.planetData = options.planetData || {};
+        this.inventory = options.inventory || null;
+        this.planetRule = options.planetRule || 30;
 
         // Discovery log entries
         this.discoveries = [];
@@ -63,6 +71,8 @@ export class TabletUI {
 
                 <div class="tablet-tabs">
                     <button class="tab-btn active" data-tab="scan">SCAN</button>
+                    <button class="tab-btn" data-tab="inventory">CARGO</button>
+                    <button class="tab-btn" data-tab="refinery">REFINE</button>
                     <button class="tab-btn" data-tab="log">LOG</button>
                     <button class="tab-btn" data-tab="cipher">CIPHER</button>
                     <button class="tab-btn" data-tab="key">KEY</button>
@@ -85,6 +95,31 @@ export class TabletUI {
                             > The terrain patterns emerge from Rule <span id="scanRuleNote">?</span>.<br>
                             > Each mountain, each valley — computed from a single number.<br>
                             > The universe is not random. It is <em>deterministic</em>.
+                        </div>
+                    </div>
+
+                    <!-- INVENTORY TAB -->
+                    <div class="tab-panel" id="tab-inventory">
+                        <div class="scan-header">MOLECULAR CARGO BAY</div>
+                        <div id="inventoryGrid" class="inventory-grid"></div>
+                        <div class="inv-empty" id="invEmpty">
+                            Cargo bay empty. Mine resources with your Multi-tool.<br>
+                            <span class="highlight">Left Click</span> to fire mining beam at rocks and flora.
+                        </div>
+                    </div>
+
+                    <!-- REFINERY TAB -->
+                    <div class="tab-panel" id="tab-refinery">
+                        <div class="scan-header">MOLECULAR ANNEALER</div>
+                        <div class="refinery-intro">
+                            > Rearrange atomic lattices using Cellular Automata rules.<br>
+                            > Select a recipe and enter a Rule Number as catalyst.
+                        </div>
+                        <div id="refineryRecipes" class="refinery-recipes"></div>
+                        <div class="refinery-active" id="refineryActive" style="display:none;">
+                            <div class="refinery-status" id="refineryStatus"></div>
+                            <div class="refinery-bar"><div class="refinery-bar-fill" id="refineryBarFill"></div></div>
+                            <div class="refinery-ca-grid" id="refineryCaGrid"></div>
                         </div>
                     </div>
 
@@ -359,6 +394,68 @@ export class TabletUI {
                 letter-spacing: 1px;
             }
 
+            /* Inventory grid */
+            .inventory-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 8px;
+            }
+            .inv-slot {
+                background: rgba(0,255,136,0.03);
+                border: 1px solid rgba(0,255,136,0.1);
+                padding: 10px;
+                text-align: center;
+                transition: all 0.3s;
+            }
+            .inv-slot:hover { border-color: rgba(0,255,136,0.3); }
+            .inv-slot .inv-icon { font-size: 20px; margin-bottom: 4px; }
+            .inv-slot .inv-name { color: #667; font-size: 9px; letter-spacing: 1px; }
+            .inv-slot .inv-qty { color: #00ff88; font-size: 14px; margin-top: 4px; }
+            .inv-slot .inv-bar { height: 2px; background: #111; margin-top: 6px; }
+            .inv-slot .inv-bar-fill { height: 100%; background: #00ff88; transition: width 0.3s; }
+            .inv-empty { color: #334; font-size: 11px; text-align: center; padding: 30px 0; line-height: 1.8; }
+
+            /* Refinery */
+            .refinery-intro { color: #445; font-size: 11px; line-height: 1.6; margin-bottom: 16px; font-style: italic; }
+            .refinery-recipes { display: flex; flex-direction: column; gap: 8px; }
+            .refinery-recipe {
+                display: flex; justify-content: space-between; align-items: center;
+                background: rgba(0,255,136,0.03); border: 1px solid rgba(0,255,136,0.1);
+                padding: 10px 12px; cursor: pointer; transition: all 0.3s;
+            }
+            .refinery-recipe:hover { border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.06); }
+            .refinery-recipe.disabled { opacity: 0.4; cursor: default; }
+            .refinery-recipe .recipe-name { color: #889; font-size: 11px; letter-spacing: 1px; }
+            .refinery-recipe .recipe-io { color: #556; font-size: 10px; margin-top: 4px; }
+            .refinery-recipe .recipe-cost { color: #445; font-size: 9px; }
+            .refinery-recipe .recipe-btn {
+                background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3);
+                color: #00ff88; font-family: 'Courier New', monospace; font-size: 10px;
+                padding: 4px 12px; cursor: pointer; letter-spacing: 1px;
+            }
+            .refinery-recipe .recipe-btn:hover { background: rgba(0,255,136,0.2); }
+            .refinery-recipe .recipe-btn:disabled { opacity: 0.3; cursor: default; }
+            .refinery-rule-input {
+                display: flex; gap: 6px; align-items: center; margin-top: 8px;
+            }
+            .refinery-rule-input label { color: #556; font-size: 10px; }
+            .refinery-rule-input input {
+                width: 60px; background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,136,0.2);
+                color: #00ff88; font-family: 'Courier New', monospace; font-size: 12px;
+                padding: 4px 8px; text-align: center; outline: none;
+            }
+            .refinery-rule-input input:focus { border-color: rgba(0,255,136,0.5); }
+            .refinery-active { margin-top: 16px; padding: 12px; background: rgba(0,255,136,0.03); border: 1px solid rgba(0,255,136,0.15); }
+            .refinery-status { color: #889; font-size: 11px; margin-bottom: 8px; }
+            .refinery-bar { height: 4px; background: #111; margin: 8px 0; }
+            .refinery-bar-fill { height: 100%; background: #00ff88; width: 0%; transition: width 0.2s; }
+            .refinery-ca-grid {
+                display: grid; grid-template-columns: repeat(16, 1fr); gap: 1px;
+                margin-top: 8px; opacity: 0.6;
+            }
+            .refinery-ca-cell { width: 100%; aspect-ratio: 1; background: #111; }
+            .refinery-ca-cell.on { background: #00ff88; }
+
             /* CRT effect */
             .tablet-frame::before {
                 content: '';
@@ -428,6 +525,8 @@ export class TabletUI {
         if (this.isOpen) {
             this.container.classList.add('open');
             this._updateTime();
+            this.updateInventory();
+            this.updateRefinery();
         } else {
             this.container.classList.remove('open');
         }
@@ -531,6 +630,155 @@ export class TabletUI {
     _updateTime() {
         const el = this.container.querySelector('#tabletTime');
         if (el) el.textContent = new Date().toLocaleTimeString();
+    }
+
+    /**
+     * Set the inventory manager reference.
+     */
+    setInventory(inventory) {
+        this.inventory = inventory;
+    }
+
+    /**
+     * Refresh the inventory display.
+     */
+    updateInventory() {
+        if (!this.inventory) return;
+        const grid = this.container.querySelector('#inventoryGrid');
+        const empty = this.container.querySelector('#invEmpty');
+        if (!grid) return;
+
+        const items = this.inventory.getAll();
+        if (items.length === 0) {
+            grid.innerHTML = '';
+            if (empty) empty.style.display = 'block';
+            return;
+        }
+        if (empty) empty.style.display = 'none';
+
+        grid.innerHTML = items.map(item => {
+            const pct = Math.round((item.quantity / item.element.maxStack) * 100);
+            const c = item.element.color;
+            const colorHex = `rgb(${Math.round(c[0]*255)},${Math.round(c[1]*255)},${Math.round(c[2]*255)})`;
+            return `<div class="inv-slot">
+                <div class="inv-icon" style="color:${colorHex}">${item.element.icon}</div>
+                <div class="inv-name">${item.element.symbol}</div>
+                <div class="inv-qty">${item.quantity}</div>
+                <div class="inv-bar"><div class="inv-bar-fill" style="width:${pct}%; background:${colorHex}"></div></div>
+            </div>`;
+        }).join('');
+    }
+
+    /**
+     * Refresh the refinery recipes display.
+     */
+    updateRefinery() {
+        if (!this.inventory) return;
+        const container = this.container.querySelector('#refineryRecipes');
+        const activePanel = this.container.querySelector('#refineryActive');
+        if (!container) return;
+
+        // If refinery is active, show progress
+        const refState = this.inventory.refining;
+        if (refState) {
+            container.style.display = 'none';
+            if (activePanel) {
+                activePanel.style.display = 'block';
+                const status = this.container.querySelector('#refineryStatus');
+                const barFill = this.container.querySelector('#refineryBarFill');
+                if (status) {
+                    const recipe = refState.recipe;
+                    const outEl = ELEMENTS[recipe.output.element];
+                    status.textContent = `> Annealing: ${recipe.name} (Rule ${refState.chosenRule}) — ${refState.efficiency.label}`;
+                }
+                if (barFill) barFill.style.width = `${Math.round(refState.progress * 100)}%`;
+                this._updateRefineryCaGrid(refState.chosenRule, refState.progress);
+            }
+            return;
+        }
+
+        // Show recipes
+        container.style.display = 'flex';
+        if (activePanel) activePanel.style.display = 'none';
+
+        const available = this.inventory.getAvailableRecipes();
+        container.innerHTML = available.map(({ recipe, canStart, reason }) => {
+            const inEl = ELEMENTS[recipe.input.element];
+            const outEl = ELEMENTS[recipe.output.element];
+            const secondIn = recipe.secondInput ? ELEMENTS[recipe.secondInput.element] : null;
+
+            const ioText = secondIn
+                ? `${recipe.input.quantity}${inEl.symbol} + ${recipe.secondInput.quantity}${secondIn.symbol} → ${recipe.output.quantity}${outEl.symbol}`
+                : `${recipe.input.quantity}${inEl.symbol} → ${recipe.output.quantity}${outEl.symbol}`;
+
+            return `<div class="refinery-recipe ${canStart ? '' : 'disabled'}" data-recipe="${recipe.id}">
+                <div>
+                    <div class="recipe-name">${recipe.name}</div>
+                    <div class="recipe-io">${ioText}</div>
+                    <div class="recipe-cost">${canStart ? `Optimal: Rule ${recipe.optimalRule}` : reason}</div>
+                    ${canStart ? `<div class="refinery-rule-input">
+                        <label>RULE:</label>
+                        <input type="number" min="0" max="255" value="${recipe.optimalRule}" class="rule-input" data-recipe="${recipe.id}">
+                        <button class="recipe-btn" data-recipe="${recipe.id}">ANNEAL</button>
+                    </div>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+
+        // Bind recipe buttons
+        container.querySelectorAll('.recipe-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const recipeId = btn.dataset.recipe;
+                const ruleInput = container.querySelector(`.rule-input[data-recipe="${recipeId}"]`);
+                const rule = ruleInput ? parseInt(ruleInput.value) || this.planetRule : this.planetRule;
+                const result = this.inventory.startRefining(recipeId, Math.max(0, Math.min(255, rule)));
+                if (result.success) {
+                    this.updateRefinery();
+                }
+            });
+        });
+
+        // Stop propagation on rule inputs
+        container.querySelectorAll('.rule-input').forEach(input => {
+            input.addEventListener('keydown', (e) => e.stopPropagation());
+            input.addEventListener('keyup', (e) => e.stopPropagation());
+        });
+    }
+
+    /**
+     * Animate the CA grid in the refinery (shows the annealing process).
+     */
+    _updateRefineryCaGrid(ruleNumber, progress) {
+        const grid = this.container.querySelector('#refineryCaGrid');
+        if (!grid) return;
+
+        const width = 16;
+        const step = Math.floor(progress * 8);
+
+        // Generate a simple CA row based on the rule
+        if (grid.children.length !== width) {
+            grid.innerHTML = '';
+            for (let i = 0; i < width; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'refinery-ca-cell';
+                grid.appendChild(cell);
+            }
+        }
+
+        // Apply CA rule visually
+        for (let i = 0; i < width; i++) {
+            const cell = grid.children[i];
+            const left = i > 0 ? (grid.children[i-1].classList.contains('on') ? 1 : 0) : 0;
+            const center = cell.classList.contains('on') ? 1 : 0;
+            const right = i < width-1 ? (grid.children[i+1].classList.contains('on') ? 1 : 0) : 0;
+            const pattern = (left << 2) | (center << 1) | right;
+            const newState = (ruleNumber >> pattern) & 1;
+
+            // Animate: toggle based on progress + position
+            const shouldBeOn = (step + i) % 3 === 0 ? newState : (Math.random() < progress ? 1 : 0);
+            cell.classList.toggle('on', shouldBeOn === 1);
+        }
     }
 
     dispose() {

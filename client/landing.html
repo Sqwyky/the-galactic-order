@@ -213,7 +213,7 @@
         <span class="key">SHIFT</span>
         <span class="key">SPACE</span>
         <span class="key">E</span>
-        <div class="desc">MOVE · SPRINT · JUMP · BOARD SHIP — CLICK TO LOOK</div>
+        <div class="desc">MOVE · SPRINT · JUMP · BOARD SHIP — CLICK TO MINE/LOOK</div>
     </div>
 
     <div id="perf"></div>
@@ -258,6 +258,13 @@ import { WeaponSystem } from './js/ship/WeaponSystem.js';
 import { ScannerSystem } from './js/ship/ScannerSystem.js';
 import { HyperspaceSystem } from './js/ship/HyperspaceSystem.js';
 import { ShipHUD } from './js/ui/ShipHUD.js';
+
+// Mining & Crafting systems
+import { MiningSystem } from './js/terrain/MiningSystem.js';
+import { InventoryManager } from './js/ui/InventoryManager.js';
+import { MiningHUD } from './js/ui/MiningHUD.js';
+import { ELEMENTS } from './js/generation/HarmonicElements.js';
+import { PerformanceManager } from './js/rendering/PerformanceManager.js';
 
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -608,6 +615,33 @@ tablet.setPlanetData({
 });
 
 // ============================================================
+// INVENTORY & MINING SYSTEMS
+// ============================================================
+const inventory = new InventoryManager();
+const miningHUD = new MiningHUD();
+
+// Mining system — Molecular Deconstructor
+const miningSystem = new MiningSystem(scene, camera, {
+    planetRule: planetRule,
+    planetSeed: planetSeed,
+    planetFrequency: planetFreq.frequency,
+    inventory: inventory,
+    onResourceCollected: (elementId, quantity, bonus) => {
+        const el = ELEMENTS[elementId];
+        if (el) {
+            miningHUD.showPickup(el.symbol, quantity, el.color, bonus);
+            tablet.addDiscovery(`Mined ${quantity} ${el.name} (${el.symbol})${bonus ? ' — ' + bonus : ''}`);
+        }
+    },
+});
+
+// Link inventory to tablet
+tablet.setInventory(inventory);
+
+// Performance manager — adaptive quality for potato laptops
+const perfManager = new PerformanceManager(renderer);
+
+// ============================================================
 // NPC MANAGER — The Mysterious Being
 // ============================================================
 const npcManager = new NPCManager(scene, {
@@ -690,6 +724,8 @@ function enterShip() {
     // Disable walking
     walker.disable();
 
+    miningSystem.disable();
+
     // Hide walking HUD elements
     document.getElementById('crosshair').classList.remove('visible');
     document.getElementById('controls-hint').classList.remove('visible');
@@ -728,6 +764,8 @@ function exitShip() {
         const groundH = terrainManager.getHeightAt(landPos.x, landPos.z) || 0;
         const walkStart = new THREE.Vector3(landPos.x + 3, groundH + 1.7, landPos.z + 3);
         walker.enable(walkStart);
+
+        miningSystem.enable();
 
         // Show walking HUD
         document.getElementById('crosshair').classList.add('visible');
@@ -987,6 +1025,9 @@ function onLanded() {
     // Enable walking
     walker.enable(startPos);
 
+    // Enable mining tool
+    miningSystem.enable();
+
     // Update phase HUD
     document.getElementById('phaseName').textContent = 'SURFACE EXPLORATION';
     document.getElementById('phaseInfo').textContent =
@@ -1067,6 +1108,27 @@ function animate() {
 
         // Atmospheric particles — floating dust/pollen
         atmosphericParticles.update(camera.position, t);
+
+        // Mining system — beam, particles, crystal pickups
+        miningSystem.setMineableMeshes(
+            Array.from(rockScatter.rockChunks.values()),
+            Array.from(alienFlora.chunkMeshes.values()).flat()
+        );
+        miningSystem.update(dt);
+        miningHUD.update(dt);
+
+        // Update mining HUD
+        const miningInfo = miningSystem.getHUDInfo();
+        miningHUD.updateHeat(miningInfo.heatPct, miningInfo.isOverheated);
+
+        // Update inventory display in tablet if open
+        if (tablet.isOpen) {
+            tablet.updateInventory();
+            tablet.updateRefinery();
+        }
+
+        // Update refinery process
+        inventory.updateRefinery(dt);
 
         // Ground fill follows camera (prevents seeing sky below terrain edges)
         groundFill.position.x = camera.position.x;
@@ -1181,6 +1243,9 @@ function animate() {
     // (SSAO → Bloom → Color Grade → Film Grain → Output)
     composer.render();
 
+    // Performance manager — adaptive quality
+    perfManager.update(dt);
+
     // FPS
     frameCount++;
     if (t - lastFpsTime > 1) {
@@ -1211,6 +1276,9 @@ window._debug = {
     get weapons() { return weaponSystem; },
     get scanner() { return scannerSystem; },
     get hyperspace() { return hyperspaceSystem; },
+    get mining() { return miningSystem; },
+    get inventory() { return inventory; },
+    get perf() { return perfManager; },
     get phase() { return currentPhase; },
 };
 
