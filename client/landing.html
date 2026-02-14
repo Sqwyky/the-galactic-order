@@ -265,7 +265,9 @@ import { InventoryManager } from './js/ui/InventoryManager.js';
 import { MiningHUD } from './js/ui/MiningHUD.js';
 import { ELEMENTS } from './js/generation/HarmonicElements.js';
 import { PerformanceManager } from './js/rendering/PerformanceManager.js';
-import { createProceduralEnvMap } from './js/rendering/ProceduralEnvMap.js';
+
+// Creature system
+import { CreatureSystem } from './js/creatures/CreatureSystem.js';
 
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -274,15 +276,15 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
-import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+import { RayMarchedAtmospherePass } from './js/rendering/RayMarchedAtmosphere.js';
 
 // ============================================================
 // URL PARAMS — planet identity
 // ============================================================
 const params = new URLSearchParams(window.location.search);
-const planetRule = parseInt(params.get('rule')) || 30;
-const planetSeed = parseInt(params.get('seed')) || 42;
-const planetName = params.get('name') || generatePlanetName(hashSeed(planetSeed, 'planet', 0));
+let planetRule = parseInt(params.get('rule')) || 30;
+let planetSeed = parseInt(params.get('seed')) || 42;
+let planetName = params.get('name') || generatePlanetName(hashSeed(planetSeed, 'planet', 0));
 
 // ============================================================
 // LOADING
@@ -299,40 +301,57 @@ function setLoading(pct, msg) {
 // LANDING PHASES
 // ============================================================
 const PHASE = {
-    INTRO: 'intro',       // Cinematic ship reveal on surface
+    DESCENT: 'descent',   // Flying down through atmosphere
+    LANDING: 'landing',   // Final approach to ground
     SURFACE: 'surface',   // Walking on the surface
     FLIGHT: 'flight',     // Flying ship
 };
-let currentPhase = PHASE.INTRO;
+let currentPhase = PHASE.DESCENT;
 
 // ============================================================
 // RENDERER
 // ============================================================
 setLoading(10, 'Creating renderer...');
+console.log('[TGO] Init: Creating renderer...');
 const canvas = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0; // Slightly darker, more cinematic
-// Shadows enabled on ULTRA/HIGH tiers — PCFSoft for smooth penumbras
+renderer.toneMappingExposure = 1.1;
+// Soft shadow maps — controlled by performance tier (disabled on LOW/POTATO)
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // ============================================================
 // POST-PROCESSING — the NMS "cinematic painted sci-fi" look
 // ============================================================
+// Standard EffectComposer — attach depth textures for ray-marched atmosphere
+console.log('[TGO] Init: Creating EffectComposer...');
 const composer = new EffectComposer(renderer);
+try {
+    const depthTex1 = new THREE.DepthTexture();
+    depthTex1.format = THREE.DepthFormat;
+    depthTex1.type = THREE.UnsignedIntType;
+    composer.renderTarget1.depthTexture = depthTex1;
+    const depthTex2 = new THREE.DepthTexture();
+    depthTex2.format = THREE.DepthFormat;
+    depthTex2.type = THREE.UnsignedIntType;
+    composer.renderTarget2.depthTexture = depthTex2;
+} catch (e) {
+    console.warn('[TGO] Depth texture setup failed:', e.message);
+}
 
-// Color Grading shader — saturation, contrast, chromatic aberration, vignette
+// Color Grading shader — cinematic NMS look: S-curve contrast, split toning,
+// chromatic aberration, vignette, subtle warm/cool shift
 const colorGradeShader = {
     uniforms: {
         tDiffuse: { value: null },
-        uSaturation: { value: 1.15 },
-        uContrast: { value: 1.15 },
+        uSaturation: { value: 1.3 },
+        uContrast: { value: 1.12 },
         uBrightness: { value: 0.01 },
-        uVignetteStrength: { value: 0.25 },
-        uChromaticAberration: { value: 0.001 },
+        uVignetteStrength: { value: 0.45 },
+        uChromaticAberration: { value: 0.003 },
     },
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -350,24 +369,41 @@ const colorGradeShader = {
         uniform float uChromaticAberration;
         varying vec2 vUv;
 
+        // Filmic S-curve tone map (more cinematic than linear contrast)
+        vec3 sCurve(vec3 x) {
+            return x * x * (3.0 - 2.0 * x);
+        }
+
         void main() {
-            // Chromatic aberration — subtle color fringing at edges
-            vec2 dir = (vUv - 0.5) * uChromaticAberration;
+            // Radial chromatic aberration — stronger at screen edges
+            vec2 center = vUv - 0.5;
+            float edgeDist = length(center);
+            vec2 dir = center * uChromaticAberration * (1.0 + edgeDist * 2.0);
             float r = texture2D(tDiffuse, vUv + dir).r;
             float g = texture2D(tDiffuse, vUv).g;
             float b = texture2D(tDiffuse, vUv - dir).b;
             vec3 color = vec3(r, g, b);
 
-            // Saturation boost (NMS is vivid)
+            // Saturation boost (NMS vivid palette)
             float luma = dot(color, vec3(0.299, 0.587, 0.114));
             color = mix(vec3(luma), color, uSaturation);
 
-            // Contrast + brightness
-            color = (color - 0.5) * uContrast + 0.5 + uBrightness;
+            // S-curve contrast (smooth, filmic — lifts shadows, compresses highlights)
+            color = clamp(color, 0.0, 1.0);
+            color = mix(color, sCurve(color), uContrast - 1.0 + 0.4);
+            color += uBrightness;
 
-            // Vignette (replaces CSS overlay — GPU is cheaper)
-            float dist = distance(vUv, vec2(0.5));
-            float vig = smoothstep(0.35, 1.2, dist) * uVignetteStrength;
+            // Split toning — warm highlights (gold), cool shadows (blue)
+            vec3 warmTint  = vec3(1.02, 0.98, 0.92);  // Subtle gold
+            vec3 coolTint  = vec3(0.92, 0.95, 1.05);  // Subtle blue
+            float lumaSplit = dot(color, vec3(0.299, 0.587, 0.114));
+            vec3 tint = mix(coolTint, warmTint, smoothstep(0.25, 0.75, lumaSplit));
+            color *= tint;
+
+            // Vignette — smooth elliptical falloff, cinematic
+            float vigDist = length(center * vec2(1.1, 1.0));
+            float vig = smoothstep(0.3, 1.1, vigDist) * uVignetteStrength;
+            vig += smoothstep(0.6, 1.3, vigDist) * uVignetteStrength * 0.3; // Extra darkening at corners
             color *= 1.0 - vig;
 
             gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
@@ -375,12 +411,12 @@ const colorGradeShader = {
     `
 };
 
-// Film Grain shader — 70s sci-fi aesthetic, adds subtle texture to flat areas
+// Film Grain shader — dual-frequency grain for photographic 70s sci-fi texture
 const filmGrainShader = {
     uniforms: {
         tDiffuse: { value: null },
         uTime: { value: 0.0 },
-        uIntensity: { value: 0.012 },
+        uIntensity: { value: 0.025 },
     },
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -395,44 +431,55 @@ const filmGrainShader = {
         uniform float uIntensity;
         varying vec2 vUv;
 
-        // Simple hash for grain
         float hash(vec2 p) {
             float h = dot(p, vec2(127.1, 311.7));
             return fract(sin(h) * 43758.5453123);
+        }
+        float hash2(vec2 p) {
+            float h = dot(p, vec2(269.5, 183.3));
+            return fract(sin(h) * 28786.3157832);
         }
 
         void main() {
             vec4 color = texture2D(tDiffuse, vUv);
 
-            // Animated grain — new pattern each frame
-            float grain = hash(vUv * 1000.0 + uTime * 100.0) * 2.0 - 1.0;
+            // Dual-frequency grain — fine + coarse for photographic feel
+            float fineGrain  = hash(vUv * 1200.0 + uTime * 137.0) * 2.0 - 1.0;
+            float coarseGrain = hash2(vUv * 300.0 + uTime * 89.0) * 2.0 - 1.0;
+            float grain = fineGrain * 0.7 + coarseGrain * 0.3;
 
-            // Grain is stronger in darker areas (film behavior)
+            // Grain is stronger in shadows (real film response)
             float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-            float grainStrength = uIntensity * (1.0 - luma * 0.5);
+            float grainStrength = uIntensity * (1.2 - luma * 0.6);
 
-            color.rgb += grain * grainStrength;
+            // Subtle color grain — each channel gets slightly different noise
+            float rGrain = grain + hash(vUv * 800.0 + uTime * 51.0) * 0.15;
+            float bGrain = grain + hash2(vUv * 900.0 + uTime * 73.0) * 0.15;
+
+            color.r += rGrain * grainStrength;
+            color.g += grain * grainStrength;
+            color.b += bGrain * grainStrength;
 
             gl_FragColor = color;
         }
     `
 };
 const filmGrainPass = new ShaderPass(filmGrainShader);
-filmGrainPass.enabled = false; // Disabled — cleaner look without grain
 
 const scene = new THREE.Scene();
 
 // ============================================================
 // ATMOSPHERE / SKY
 // ============================================================
+console.log('[TGO] Init: Composer ready, generating atmosphere...');
 setLoading(15, 'Generating atmosphere...');
 
 // Determine atmosphere from Harmonic Resonance system (Antigravity Brain integration)
 // The planet's CA rule → brainwave frequency → mood → sky colors, fog, atmosphere
-const classification = classifyRule(planetRule);
-const planetMood = derivePlanetMood(planetRule, planetSeed);
-const planetFreq = derivePlanetFrequency(planetRule, planetSeed);
-const planetNote = frequencyToNote(planetFreq.frequency);
+let classification = classifyRule(planetRule);
+let planetMood = derivePlanetMood(planetRule, planetSeed);
+let planetFreq = derivePlanetFrequency(planetRule, planetSeed);
+let planetNote = frequencyToNote(planetFreq.frequency);
 
 // Sky colors driven by the planet's resonant frequency band
 const skyTopColor = new THREE.Color(...planetMood.sky.topColor);
@@ -441,8 +488,8 @@ const fogColor = new THREE.Color(...planetMood.sky.fogColor);
 const sunColor = new THREE.Color(...planetMood.sky.sunColor);
 
 // Atmosphere tint for re-entry overlay
-const fc = planetMood.sky.fogColor;
-const atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
+let fc = planetMood.sky.fogColor;
+let atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
 
 console.log(`[TGO] Planet mood: ${planetMood.bandLabel} (${planetMood.moodName}) ` +
     `@ ${planetFreq.frequency.toFixed(2)}Hz (${planetNote.display}) ` +
@@ -450,7 +497,7 @@ console.log(`[TGO] Planet mood: ${planetMood.bandLabel} (${planetMood.moodName})
     (planetMood.isSchumannResonant ? ' ★ RESONANT' : ''));
 
 // Fog density driven by planet mood (Delta = thick fog, Alpha = clear, Gamma = toxic haze)
-const moodFogDensity = planetMood.atmosphere.fogDensity;
+let moodFogDensity = planetMood.atmosphere.fogDensity;
 scene.fog = new THREE.FogExp2(fogColor, moodFogDensity);
 
 // NMS-style gradient sky dome — colors from harmonic resonance system
@@ -464,21 +511,15 @@ const skyDome = new SkyDome({
 });
 skyDome.addToScene(scene); // Also sets scene.background = null
 
-// Procedural environment map — gives all PBR materials subtle sky reflections
-const envMap = createProceduralEnvMap(
-    renderer, skyTopColor, skyBottomColor, fogColor, sunColor,
-    new THREE.Vector3(0.5, 0.3, 0.4).normalize()
-);
-scene.environment = envMap;
-
 // ============================================================
 // LIGHTING
 // ============================================================
+console.log('[TGO] Init: Sky dome ready, creating lights...');
 setLoading(20, 'Igniting local star...');
 
-const sunLight = new THREE.DirectionalLight(sunColor, 2.5);
+// Main sun — directional with shadow casting
+const sunLight = new THREE.DirectionalLight(sunColor, 2.8);
 sunLight.position.set(100, 80, 60);
-// Shadow mapping — grounding rocks, flora, and ship
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.width = 2048;
 sunLight.shadow.mapSize.height = 2048;
@@ -499,8 +540,18 @@ scene.add(ambientLight);
 
 // Hemisphere light — sky color from above, warm earth tone from below
 // This makes shadows take on the sky tint (blue shadows on blue worlds, etc.)
-const hemiLight = new THREE.HemisphereLight(skyTopColor, 0x332211, 0.7);
+const hemiLight = new THREE.HemisphereLight(skyTopColor, 0x443322, 0.8);
 scene.add(hemiLight);
+
+// Fill light — warm bounce from below, prevents pitch-black undersides
+const fillLight = new THREE.DirectionalLight(0xffaa66, 0.35);
+fillLight.position.set(-30, -20, 20);
+scene.add(fillLight);
+
+// Rim light — subtle backlight that separates objects from background
+const rimLight = new THREE.DirectionalLight(skyTopColor, 0.25);
+rimLight.position.set(-50, 40, -80);
+scene.add(rimLight);
 
 // ============================================================
 // CAMERA
@@ -521,12 +572,31 @@ ssaoPass.maxDistance = 0.15;
 ssaoPass.output = SSAOPass.OUTPUT.Default; // Blended with scene
 composer.addPass(ssaoPass);
 
+// Ray-marched atmosphere — volumetric scattering, aerial perspective, god rays
+let atmospherePass = null;
+try {
+    atmospherePass = new RayMarchedAtmospherePass(camera, {
+        skyColor: skyTopColor,
+        fogColor: fogColor,
+        sunColor: sunColor,
+        sunDirection: new THREE.Vector3(0.5, 0.3, 0.4).normalize(),
+        fogDensity: moodFogDensity,
+        scatterStrength: planetMood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
+        godRayStrength: 0.25,
+        aerialPerspective: 0.8,
+        heightFalloff: 0.08,
+    });
+    composer.addPass(atmospherePass);
+} catch (e) {
+    console.warn('[TGO] Ray-marched atmosphere disabled:', e.message);
+}
+
 // Bloom — strength driven by planet mood (dreamlike Delta = more bloom, calm Alpha = less)
 const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    Math.min(planetMood.atmosphere.bloomStrength, 1.0),  // mood-driven, capped at 1.0
-    0.5,   // radius (tighter, focused glow)
-    0.88   // threshold (only truly bright things bloom)
+    planetMood.atmosphere.bloomStrength,  // mood-driven bloom
+    0.85,   // radius (wide soft glow — slightly larger for cinematic feel)
+    0.75    // threshold (slightly lower — catches more highlights for atmosphere)
 );
 composer.addPass(bloomPass);
 
@@ -534,14 +604,7 @@ composer.addPass(bloomPass);
 const colorGradePass = new ShaderPass(colorGradeShader);
 composer.addPass(colorGradePass);
 
-// SMAA — sub-pixel morphological anti-aliasing (kills jaggies from post-processing)
-const smaaPass = new SMAAPass(
-    window.innerWidth * renderer.getPixelRatio(),
-    window.innerHeight * renderer.getPixelRatio()
-);
-composer.addPass(smaaPass);
-
-// Film grain — subtle texture, stronger in dark areas
+// Film grain — 70s sci-fi texture, stronger in dark areas
 composer.addPass(filmGrainPass);
 
 // Output pass (applies tone mapping to final output)
@@ -550,9 +613,10 @@ composer.addPass(new OutputPass());
 // ============================================================
 // TERRAIN
 // ============================================================
+console.log('[TGO] Init: Post-processing pipeline ready, generating terrain...');
 setLoading(30, `Generating terrain (Rule ${planetRule})...`);
 
-const terrainManager = new TerrainManager(scene, {
+let terrainManager = new TerrainManager(scene, {
     rule: planetRule,
     seed: planetSeed,
     moistureRule: (planetRule + 73) & 0xFF,
@@ -560,7 +624,7 @@ const terrainManager = new TerrainManager(scene, {
 // Uses TERRAIN_CONFIG defaults (heightScale: 15, waterLevel: 0, etc.)
 
 // NMS-style instanced grass — populates terrain near the camera
-const grassSystem = new GrassSystem(scene, {
+let grassSystem = new GrassSystem(scene, {
     baseColor: new THREE.Color(0x1a5e12), // Dark grass base (fake AO)
     tipColor: new THREE.Color(0x7ec850),  // Bright grass tips (sunlit)
     fogColor: fogColor,
@@ -568,7 +632,7 @@ const grassSystem = new GrassSystem(scene, {
 });
 
 // Scattered rocks — shapes derived from CA rule (supershape rocks)
-const rockScatter = new RockScatter(scene, {
+let rockScatter = new RockScatter(scene, {
     planetRule: planetRule,
     rockSeed: hashSeed(planetSeed, 'rock'),
     rockColor: new THREE.Color(0x8a7d6b), // Fallback color
@@ -577,7 +641,7 @@ const rockScatter = new RockScatter(scene, {
 
 // Alien flora — supershape geometries driven by the planet's CA rule
 // Wind strength from mood (Delta = still, Gamma = strong winds)
-const alienFlora = new AlienFloraSystem(scene, {
+let alienFlora = new AlienFloraSystem(scene, {
     planetRule: planetRule,
     floraSeed: hashSeed(planetSeed, 'flora'),
     fogColor: fogColor,
@@ -587,10 +651,10 @@ const alienFlora = new AlienFloraSystem(scene, {
 
 // Water plane — animated wave shader, follows camera
 const sunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
-terrainManager.createWater(fogColor, sunDir, skyTopColor, skyBottomColor);
+terrainManager.createWater(fogColor, sunDir);
 
 // Atmospheric dust/pollen particles — count + speed from planet mood
-const atmosphericParticles = new AtmosphericParticles(scene, {
+let atmosphericParticles = new AtmosphericParticles(scene, {
     color: new THREE.Color(0xddcc99),  // Warm dust motes
     fogColor: fogColor,
     fogDensity: moodFogDensity,
@@ -671,7 +735,7 @@ tablet.setInventory(inventory);
 const perfManager = new PerformanceManager(renderer);
 
 // Wire perf manager to post-processing passes (so tier changes actually take effect)
-perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass, smaaPass, renderer, sunLight);
+perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass);
 
 // Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
 perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
@@ -689,20 +753,36 @@ perfManager.onQualityChanged((tierName, settings) => {
 // ============================================================
 // NPC MANAGER — The Mysterious Being
 // ============================================================
-const npcManager = new NPCManager(scene, {
+let npcManager = new NPCManager(scene, {
     seed: planetSeed,
     rule: planetRule,
 }, (x, z) => terrainManager.getHeightAt(x, z));
 
 // ============================================================
+// CREATURE SYSTEM — Procedural alien life forms
+// ============================================================
+let creatureSystem = null;
+console.log('[TGO] Init: Creating creature system...');
+try {
+    creatureSystem = new CreatureSystem(scene, {
+        planetRule: planetRule,
+        planetSeed: planetSeed,
+        getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
+        getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+    });
+} catch (e) {
+    console.warn('[TGO] Creature system disabled:', e.message);
+}
+
+// ============================================================
 // SHIP + FLIGHT SYSTEMS
 // ============================================================
 
-// Ship model (parked on surface, visible from landing)
+// Ship model — "Voidmoth" Mk-I starter ship
 const shipModel = new ShipModel({
-    hullColor: new THREE.Color(0x556677),
-    accentColor: new THREE.Color(0xcc6633),
-    engineColor: new THREE.Color(0x33ccff),
+    hullColor: new THREE.Color(0x5a6577),
+    accentColor: new THREE.Color(0xb83232),
+    engineColor: new THREE.Color(0x33ddff),
 });
 shipModel.setLandingGear(true);
 shipModel.addToScene(scene);
@@ -741,6 +821,199 @@ const hyperspaceSystem = new HyperspaceSystem(scene, camera);
 
 // Ship HUD
 const shipHUD = new ShipHUD();
+
+// ============================================================
+// SEAMLESS PLANET TRANSITION — no loading screen, no page reload
+// ============================================================
+// When the player jumps to a new planet via hyperspace, this function
+// disposes the old world and recreates everything with new parameters.
+// The flash overlay hides the transition; descent animation plays on arrival.
+//
+// Flow: FLIGHT → charge → flash → [dispose/recreate] → DESCENT → SURFACE
+
+hyperspaceSystem.onJump = (newRule, newSeed) => transitionToPlanet(newRule, newSeed);
+
+function transitionToPlanet(newRule, newSeed) {
+    // ---- Phase lock: prevent game loop from updating stale systems ----
+    currentPhase = PHASE.DESCENT;
+
+    // ---- Disable all active systems ----
+    walker.disable();
+    miningSystem.disable();
+    flightController.disable();
+    weaponSystem.disable();
+    scannerSystem.disable();
+    hyperspaceSystem.disable();
+    shipHUD.hide();
+    document.getElementById('crosshair').classList.remove('visible');
+    document.getElementById('controls-hint').classList.remove('visible');
+
+    // ---- Dispose planet-specific systems (geometry, materials, meshes) ----
+    terrainManager.dispose();
+    grassSystem.dispose();
+    rockScatter.dispose();
+    alienFlora.dispose();
+    atmosphericParticles.dispose();
+    npcManager.dispose();
+    if (creatureSystem) creatureSystem.dispose();
+
+    // ---- Update planet identity ----
+    planetRule = newRule;
+    planetSeed = newSeed;
+    planetName = generatePlanetName(hashSeed(planetSeed, 'planet', 0));
+
+    // Update URL so refresh works (no page reload)
+    history.replaceState(null, '', `landing.html?rule=${newRule}&seed=${newSeed}`);
+
+    // ---- Recalculate planet characteristics from CA rule + seed ----
+    classification = classifyRule(planetRule);
+    planetMood = derivePlanetMood(planetRule, planetSeed);
+    planetFreq = derivePlanetFrequency(planetRule, planetSeed);
+    planetNote = frequencyToNote(planetFreq.frequency);
+
+    // ---- Recalculate colors ----
+    skyTopColor.set(...planetMood.sky.topColor);
+    skyBottomColor.set(...planetMood.sky.bottomColor);
+    fogColor.set(...planetMood.sky.fogColor);
+    sunColor.set(...planetMood.sky.sunColor);
+    fc = planetMood.sky.fogColor;
+    atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
+    moodFogDensity = planetMood.atmosphere.fogDensity;
+
+    // ---- Update scene fog ----
+    scene.fog.color.copy(fogColor);
+    scene.fog.density = moodFogDensity;
+
+    // ---- Update sky dome ----
+    skyDome.material.uniforms.uTopColor.value.copy(skyTopColor);
+    skyDome.material.uniforms.uMidColor.value.copy(skyBottomColor);
+    skyDome.material.uniforms.uBottomColor.value.copy(fogColor);
+    skyDome.material.uniforms.uFogColor.value.copy(fogColor);
+    skyDome.material.uniforms.uSunColor.value.copy(sunColor);
+
+    // ---- Update lighting ----
+    sunLight.color.copy(sunColor);
+    ambientLight.color.copy(skyBottomColor);
+    ambientLight.intensity = planetMood.atmosphere.ambientLight;
+    hemiLight.color.copy(skyTopColor);
+    groundFillMat.color.copy(fogColor);
+
+    // ---- Update bloom strength for new planet mood ----
+    perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
+
+    // ---- Update ray-marched atmosphere for new planet ----
+    if (atmospherePass) atmospherePass.setAtmosphere({
+        skyColor: skyTopColor,
+        fogColor: fogColor,
+        sunColor: sunColor,
+        fogDensity: moodFogDensity,
+        scatterStrength: planetMood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
+    });
+
+    // ---- Recreate terrain (new CA rule + seed = new world) ----
+    terrainManager = new TerrainManager(scene, {
+        rule: planetRule,
+        seed: planetSeed,
+        moistureRule: (planetRule + 73) & 0xFF,
+    });
+    const newSunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
+    terrainManager.createWater(fogColor, newSunDir);
+
+    // ---- Recreate vegetation + environment ----
+    grassSystem = new GrassSystem(scene, {
+        baseColor: new THREE.Color(0x1a5e12),
+        tipColor: new THREE.Color(0x7ec850),
+        fogColor: fogColor,
+        fogDensity: moodFogDensity,
+    });
+
+    rockScatter = new RockScatter(scene, {
+        planetRule: planetRule,
+        rockSeed: hashSeed(planetSeed, 'rock'),
+        rockColor: new THREE.Color(0x8a7d6b),
+        fogColor: fogColor,
+    });
+
+    alienFlora = new AlienFloraSystem(scene, {
+        planetRule: planetRule,
+        floraSeed: hashSeed(planetSeed, 'flora'),
+        fogColor: fogColor,
+        fogDensity: moodFogDensity,
+        windStrength: planetMood.atmosphere.windStrength,
+    });
+
+    // ---- Recreate atmospheric particles ----
+    atmosphericParticles = new AtmosphericParticles(scene, {
+        color: new THREE.Color(0xddcc99),
+        fogColor: fogColor,
+        fogDensity: moodFogDensity,
+        count: planetMood.atmosphere.particleCount,
+    });
+
+    // ---- Recreate NPCs ----
+    npcManager = new NPCManager(scene, {
+        seed: planetSeed,
+        rule: planetRule,
+    }, (x, z) => terrainManager.getHeightAt(x, z));
+
+    // ---- Recreate creature system ----
+    try {
+        creatureSystem = new CreatureSystem(scene, {
+            planetRule: planetRule,
+            planetSeed: planetSeed,
+            getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
+            getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+        });
+    } catch (e) {
+        console.warn('[TGO] Creature system recreation failed:', e.message);
+        creatureSystem = null;
+    }
+
+    // ---- Reset encounter state ----
+    encounterState = 'waiting';
+    beingDialogueIndex = 0;
+
+    // ---- Update tablet with new planet data ----
+    tablet.setPlanetData({
+        name: planetName,
+        rule: planetRule,
+        ruleClass: classification.class,
+        ruleLabel: classification.label,
+        archetype: classification.label,
+        atmosphere: planetMood.moodName.charAt(0).toUpperCase() + planetMood.moodName.slice(1),
+        hazard: planetMood.band === 'gamma' ? 'Extreme' : planetMood.band === 'beta' ? 'Moderate' : 'Low',
+        frequency: `${planetFreq.frequency.toFixed(2)}Hz`,
+        musicalNote: planetNote.display,
+        brainwaveBand: planetMood.bandLabel,
+        mood: planetMood.moodName,
+        schumannResonant: planetMood.isSchumannResonant,
+    });
+    tablet.addDiscovery(`Warped to ${planetName} (Rule ${planetRule}).`, 'discovery');
+
+    // ---- Reset descent state machine ----
+    descentProgress = 0;
+    descentLanded = false;
+    shipGrounded = false;
+
+    // ---- Hide ship during descent (repositioned on landing) ----
+    shipModel.group.visible = false;
+    shipModel.setLandingGear(true);
+
+    // ---- Camera to descent start position ----
+    camera.position.set(0, descentStartHeight, 0);
+    camera.lookAt(0, 0, 0);
+
+    // ---- Fade out flash → descent begins on next frame ----
+    setTimeout(() => {
+        hyperspaceSystem.flashOverlay.style.opacity = '0';
+        hyperspaceSystem.resetJumpState();
+    }, 300);
+
+    console.log(
+        `[TGO] ★ Warped to ${planetName} ` +
+        `(Rule ${planetRule}, Seed ${planetSeed}, ${planetMood.bandLabel} ${planetMood.moodName})`
+    );
+}
 
 // World position helper (for when camera is child of ship)
 const _shipWorldPos = new THREE.Vector3();
@@ -825,7 +1098,7 @@ function exitShip() {
 
 // Global E key listener (always active after landing)
 document.addEventListener('keydown', (e) => {
-    if (e.code === 'KeyE' && currentPhase !== PHASE.INTRO) {
+    if (e.code === 'KeyE' && currentPhase !== PHASE.DESCENT) {
         // Don't toggle during dialogue or tablet
         if (dialogue && dialogue.isDialogueActive()) return;
         if (tablet && tablet.isOpen) return;
@@ -943,119 +1216,94 @@ function triggerBeingDialogue() {
 }
 
 // ============================================================
-// INTRO CINEMATIC — Ship reveal on the surface
+// DESCENT ANIMATION
 // ============================================================
-// The camera orbits around the landed ship, showing it off,
-// then settles behind the player for seamless FPS transition.
-let introProgress = 0;
-const introDuration = 7.0; // seconds for the full orbit
-let introShipPos = new THREE.Vector3(0, 0, 0); // set after terrain loads
-let introFinished = false;
+let descentProgress = 0;
+const descentDuration = 6.0; // seconds
+const descentStartHeight = 300;
+const descentEndHeight = 15; // just above ground
+let descentLanded = false;
 
-// Pre-position ship on the ground at origin before intro starts
-function initIntro() {
-    // Use origin area for initial terrain generation
-    terrainManager.update(new THREE.Vector3(0, 0, 0));
+function updateDescent(dt) {
+    descentProgress += dt / descentDuration;
 
-    // Wait a tick for terrain to generate, then place ship
-    const groundH = terrainManager.getHeightAt(0, 0) || 5;
-    introShipPos.set(0, groundH + 1.2, 0);
-    shipModel.group.position.copy(introShipPos);
-    shipModel.group.rotation.y = Math.PI * 0.25; // Angled for a nice profile view
-    shipModel.setLandingGear(true);
-    shipGrounded = true;
-
-    // Position camera at the starting orbit position (behind-left, looking at ship)
-    camera.position.set(introShipPos.x - 10, introShipPos.y + 5, introShipPos.z - 8);
-    camera.lookAt(introShipPos);
-
-    // HUD setup for intro
-    document.getElementById('phaseName').textContent = 'ARRIVING ON SURFACE';
-    document.getElementById('altitudeValue').textContent = `${Math.round(groundH)}m`;
-}
-
-function updateIntro(dt) {
-    introProgress += dt / introDuration;
-
-    if (introProgress >= 1.0) {
-        introProgress = 1.0;
-        if (!introFinished) {
-            introFinished = true;
+    if (descentProgress >= 1.0) {
+        descentProgress = 1.0;
+        if (!descentLanded) {
+            descentLanded = true;
             onLanded();
         }
         return;
     }
 
-    // Smooth easing (slow at start, smooth mid, slow at end)
-    const t = introProgress;
-    const ease = t < 0.5
-        ? 2 * t * t                          // ease-in first half
-        : 1 - Math.pow(-2 * t + 2, 2) / 2;  // ease-out second half
+    // Smooth descent curve (fast at start, slow at end)
+    const t = 1.0 - Math.pow(1.0 - descentProgress, 3);
+    const height = descentStartHeight * (1 - t) + descentEndHeight * t;
 
-    // Orbit angle: sweep ~270° around the ship (start behind-left, end behind-right)
-    const startAngle = Math.PI * 1.25;   // Start behind-left
-    const endAngle   = Math.PI * -0.15;  // End slightly right of front
-    const angle = startAngle + (endAngle - startAngle) * ease;
+    // Slight forward drift
+    const forwardDrift = t * 20;
 
-    // Orbit radius: start far, come in closer, then pull back for FPS transition
-    const radiusBase = 10;
-    const radiusVariation = -3 * Math.sin(ease * Math.PI); // Closer in the middle
-    const radius = radiusBase + radiusVariation;
+    // Camera shake during re-entry (strongest at start, fades as we slow down)
+    let shakeX = 0, shakeY = 0;
+    if (descentProgress < 0.6) {
+        const shakeIntensity = (1.0 - descentProgress / 0.6) * 1.5;
+        const shakeFreq = 15 + descentProgress * 20; // Gets faster, then calms
+        shakeX = Math.sin(descentProgress * shakeFreq * 6.28) * shakeIntensity *
+                 (0.5 + Math.sin(descentProgress * 47) * 0.5);
+        shakeY = Math.cos(descentProgress * shakeFreq * 5.13) * shakeIntensity * 0.6;
+    }
 
-    // Height: start high, dip down to eye level at end
-    const heightStart = 5.0;
-    const heightEnd   = 2.0;
-    const height = heightStart + (heightEnd - heightStart) * ease;
+    camera.position.set(
+        Math.sin(descentProgress * 0.5) * 5 + shakeX,
+        height + shakeY,
+        forwardDrift
+    );
 
-    // Camera position on orbit path
-    const camX = introShipPos.x + Math.cos(angle) * radius;
-    const camZ = introShipPos.z + Math.sin(angle) * radius;
-    const camY = introShipPos.y + height;
+    // Look slightly ahead and down
+    const lookY = height * 0.3;
+    camera.lookAt(0, lookY, forwardDrift + 20);
 
-    camera.position.set(camX, camY, camZ);
-
-    // Look at point: starts at ship center, transitions to slightly above ship
-    const lookY = introShipPos.y + 0.5 + (1.0 - ease) * 1.5;
-    camera.lookAt(introShipPos.x, lookY, introShipPos.z);
-
-    // Atmosphere overlay — subtle fade from dark (screen was loading) to clear
+    // Atmosphere overlay intensity
     const atmosOverlay = document.getElementById('atmos-overlay');
-    if (introProgress < 0.15) {
-        // Quick fade from dark
-        const fadeIn = introProgress / 0.15;
-        atmosOverlay.style.background = `rgba(0,0,0,${(1 - fadeIn) * 0.5})`;
+    if (descentProgress < 0.3) {
+        // Re-entry glow (orange) — intense plasma heating effect
+        const baseIntensity = Math.sin(descentProgress / 0.3 * Math.PI) * 0.4;
+        // Flickering fire effect during re-entry
+        const flicker = 0.05 * Math.sin(descentProgress * 80) + 0.03 * Math.sin(descentProgress * 130);
+        const intensity = baseIntensity + flicker;
+        // Edge glow: orange center → red edges for realistic re-entry
+        atmosOverlay.style.background =
+            `radial-gradient(ellipse at center, ` +
+            `rgba(255,180,80,${intensity * 0.3}), ` +
+            `rgba(255,120,30,${intensity * 0.7}), ` +
+            `rgba(200,50,10,${intensity * 0.4}) 70%, ` +
+            `transparent)`;
+        atmosOverlay.style.opacity = 1;
+    } else if (descentProgress < 0.7) {
+        // Atmosphere haze (planet tint fading in)
+        const hazeIntensity = (descentProgress - 0.3) / 0.4 * 0.15;
+        atmosOverlay.style.background = atmosTint + hazeIntensity + ')';
         atmosOverlay.style.opacity = 1;
     } else {
         atmosOverlay.style.opacity = 0;
     }
 
-    // Update altitude display
-    const groundH = terrainManager.getHeightAt(camera.position.x, camera.position.z) || 0;
+    // Altitude display
     document.getElementById('altitudeValue').textContent =
-        `${Math.round(camera.position.y - groundH)}m`;
+        `${Math.round(height)}m`;
 
-    // Update world systems during intro so everything is loaded & visible
-    terrainManager.update(introShipPos); // Center terrain on ship, not camera
-    skyDome.update(introShipPos, t * introDuration);
-    terrainManager.updateWater(t * introDuration, introShipPos);
-    atmosphericParticles.update(introShipPos, t * introDuration);
-
-    // Pre-populate visual elements near the ship during the orbit
-    grassSystem.update(terrainManager.chunks, introShipPos, t * introDuration);
-    rockScatter.update(terrainManager.chunks, introShipPos);
-    alienFlora.update(terrainManager.chunks, introShipPos, t * introDuration);
-
-    // Sun tracking
-    sunLight.position.set(introShipPos.x + 100, 80, introShipPos.z + 60);
-    sunLight.target.position.set(introShipPos.x, 0, introShipPos.z);
-
-    // Ground fill
-    groundFill.position.x = introShipPos.x;
-    groundFill.position.z = introShipPos.z;
+    // Update terrain around descent path
+    terrainManager.update(camera.position, camera, dt);
+    // Sky dome follows camera during descent too
+    skyDome.update(camera.position, descentProgress * descentDuration);
+    // Water waves animate during descent
+    terrainManager.updateWater(descentProgress * descentDuration, camera.position);
+    // Particles visible during descent
+    atmosphericParticles.update(camera.position, descentProgress * descentDuration);
 }
 
 // ============================================================
-// LANDING — transition from intro cinematic to walking
+// LANDING — transition to walking
 // ============================================================
 function onLanded() {
     currentPhase = PHASE.SURFACE;
@@ -1068,7 +1316,7 @@ function onLanded() {
         (planetMood.isSchumannResonant ? ' · ★ RESONANT' : '');
     banner.classList.add('visible');
 
-    // Fade out banner after 4 seconds
+    // Fade out banner after 3 seconds
     setTimeout(() => {
         banner.classList.remove('visible');
     }, 4000);
@@ -1084,22 +1332,16 @@ function onLanded() {
         document.getElementById('controls-hint').classList.remove('visible');
     }, 9000);
 
-    // Player starts well clear of the ship, off to the side
-    const playerOffset = 12; // metres from ship
-    const playerX = introShipPos.x + playerOffset;
-    const playerZ = introShipPos.z + 4;
-    const groundH = terrainManager.getHeightAt(playerX, playerZ) || 5;
-    const startPos = new THREE.Vector3(playerX, groundH + 1.7, playerZ);
+    // Find a good landing spot (get ground height at current position)
+    const groundH = terrainManager.getHeightAt(camera.position.x, camera.position.z) || 5;
+    const startPos = new THREE.Vector3(
+        camera.position.x,
+        groundH + 1.7,
+        camera.position.z
+    );
 
     // Enable walking
     walker.enable(startPos);
-
-    // Set initial look direction: face AWAY from the ship (toward open landscape)
-    // The walker uses yaw for forward direction: -sin(yaw), 0, -cos(yaw)
-    // We want to look away from the ship, so compute angle from ship to player
-    const dx = playerX - introShipPos.x;
-    const dz = playerZ - introShipPos.z;
-    walker.rotation.yaw = -Math.atan2(dx, dz); // Face away from ship
 
     // Enable mining tool
     miningSystem.enable();
@@ -1109,15 +1351,20 @@ function onLanded() {
     document.getElementById('phaseInfo').textContent =
         `${planetName} · Rule ${planetRule}`;
 
-    // Ship is already positioned by initIntro(), no need to reposition
-    // shipGrounded is already true from initIntro()
+    // Position the ship on the ground near the player
+    const shipX = camera.position.x + shipSpawnOffset.x;
+    const shipZ = camera.position.z + shipSpawnOffset.z;
+    const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || groundH;
+    shipModel.group.position.set(shipX, shipGroundH + 2.5, shipZ);
+    shipModel.group.visible = true; // Ensure visible after hyperspace warp
+    shipGrounded = true;
 
     // Spawn the Mysterious Being
     setTimeout(() => {
         npcManager.spawnMysteriousBeing();
         tablet.addDiscovery(`Landed on ${planetName}. Surface exploration initiated.`);
         tablet.addDiscovery(`Anomalous energy signature detected nearby...`);
-        tablet.addDiscovery(`Your ship is parked nearby. Press E to board.`);
+        tablet.addDiscovery(`Your ship — Voidmoth Mk-I — is parked nearby. Press E to board.`);
     }, 2000);
 }
 
@@ -1129,6 +1376,7 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    if (atmospherePass) atmospherePass.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ============================================================
@@ -1137,19 +1385,14 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 let frameCount = 0, lastFpsTime = 0;
 
-setLoading(80, 'Preparing surface...');
+console.log('[TGO] Init: All systems ready, starting game loop...');
+setLoading(100, 'Entering atmosphere...');
 
-// Initialize intro (places ship, camera, terrain)
-initIntro();
-
-// Fade out loading after a short delay
+// Quick fade — the descent animation IS the loading experience
 setTimeout(() => {
-    setLoading(100, 'Arriving on surface...');
-    setTimeout(() => {
-        loadingEl.classList.add('fade');
-        setTimeout(() => { loadingEl.style.display = 'none'; }, 2000);
-    }, 500);
-}, 1000);
+    loadingEl.classList.add('fade');
+    setTimeout(() => { loadingEl.style.display = 'none'; }, 1200);
+}, 300);
 
 function animate() {
     requestAnimationFrame(animate);
@@ -1157,14 +1400,14 @@ function animate() {
     const t = clock.getElapsedTime();
 
     // Phase-specific update
-    if (currentPhase === PHASE.INTRO) {
-        updateIntro(dt);
+    if (currentPhase === PHASE.DESCENT) {
+        updateDescent(dt);
     } else if (currentPhase === PHASE.SURFACE) {
         // Don't update walking during dialogue or tablet
         if (!dialogue.isDialogueActive() && !tablet.isOpen) {
             walker.update(dt);
         }
-        terrainManager.update(camera.position);
+        terrainManager.update(camera.position, camera, dt);
 
         // Sky dome follows camera
         skyDome.update(camera.position, t);
@@ -1212,6 +1455,9 @@ function animate() {
         // Update NPCs
         npcManager.update(dt, camera.position);
 
+        // Update alien creatures
+        if (creatureSystem) creatureSystem.update(dt, camera.position);
+
         // Check Mysterious Being proximity
         if (npcManager.mysteriousBeing && encounterState !== 'talking') {
             const proximity = npcManager.checkMysteriousBeingProximity(camera.position);
@@ -1233,13 +1479,18 @@ function animate() {
             tablet.setCoordinates(camera.position.x, camera.position.y, camera.position.z);
         }
 
-        // Sun follows player for consistent lighting direction
+        // Sun follows player for consistent lighting + shadow coverage
         sunLight.position.set(
             camera.position.x + 100,
             80,
             camera.position.z + 60
         );
-        sunLight.target.position.set(camera.position.x, 0, camera.position.z);
+        sunLight.target.position.set(
+            camera.position.x,
+            0,
+            camera.position.z
+        );
+        sunLight.target.updateMatrixWorld();
 
         // Check ship proximity (show "Press E" prompt)
         if (shipGrounded) {
@@ -1265,7 +1516,7 @@ function animate() {
         flightController.getWorldPosition(_shipWorldPos);
 
         // Terrain keeps generating around ship
-        terrainManager.update(_shipWorldPos);
+        terrainManager.update(_shipWorldPos, camera, dt);
 
         // Sky dome follows ship
         skyDome.update(_shipWorldPos, t);
@@ -1295,13 +1546,14 @@ function animate() {
         const flightInfo = flightController.getHUDInfo();
         hyperspaceSystem.update(dt, flightInfo.altitude);
 
-        // Sun follows ship
+        // Sun follows ship (shadow camera tracks too)
         sunLight.position.set(
             _shipWorldPos.x + 100,
             80,
             _shipWorldPos.z + 60
         );
         sunLight.target.position.set(_shipWorldPos.x, 0, _shipWorldPos.z);
+        sunLight.target.updateMatrixWorld();
 
         // Ship HUD
         shipHUD.update(flightInfo, weaponSystem.getHUDInfo());
@@ -1329,7 +1581,7 @@ function animate() {
         const fps = Math.round(frameCount / (t - lastFpsTime));
         const stats = terrainManager.getStats();
         document.getElementById('perf').textContent =
-            `${fps} FPS · ${perfManager.tierName} · ${stats.activeChunks} chunks · ${renderer.info.render.triangles} tris`;
+            `${fps} FPS · ${perfManager.tierName} · ${stats.activeChunks} chunks (${stats.culledChunks || 0} culled) · LOD ${stats.lodBias?.toFixed(1) || '1.0'} · ${renderer.info.render.triangles} tris`;
         frameCount = 0;
         lastFpsTime = t;
     }
@@ -1357,6 +1609,7 @@ window._debug = {
     get inventory() { return inventory; },
     get perf() { return perfManager; },
     get phase() { return currentPhase; },
+    warpTo: transitionToPlanet,
 };
 
 </script>

@@ -1,509 +1,651 @@
 /**
- * THE GALACTIC ORDER - Procedural Ship Model v2
+ * THE GALACTIC ORDER — "Voidmoth" Mk-I Starter Ship
  *
- * A detailed NMS-style explorer spacecraft built from Three.js primitives.
- * No external models needed — every panel, vent, and thruster is code-generated.
+ * Professional-grade, multi-layered NMS-style fighter/explorer spacecraft
+ * built entirely from Three.js primitives.  No external assets required.
  *
- * Design language: Sleek angular explorer with:
- *   - Sculpted fuselage (tapered nose, raised spine, flat belly)
- *   - Bubble cockpit with visible frame struts
- *   - Swept delta wings with anhedral tips
- *   - Twin engine nacelles with intake scoops
- *   - Dorsal fin + twin ventral stabilisers
- *   - Hull panel lines and greeble detail
- *   - Emissive engine glow with exhaust trail
- *   - Retractable landing gear with shock absorbers
+ * Design language:
+ *   - Layered hull plating with visible panel seams
+ *   - Pointed nose with sensor array
+ *   - Bubble cockpit with structural frame ribs
+ *   - Swept delta wings with leading-edge accents
+ *   - Wing-mounted engine nacelles on short pylons
+ *   - Tall dorsal stabiliser fin + ventral strake
+ *   - Multiple engine glow rings & running lights
+ *   - Detailed landing gear with struts and pads
  */
 
 import * as THREE from 'three';
 
 // ============================================================
-// HELPER: merge buffer geometries manually (avoid import)
+// HELPERS
 // ============================================================
-function mergeInto(targetGroup, geo, mat, pos, rot, scale, shadow = true) {
-    const mesh = new THREE.Mesh(geo, mat);
-    if (pos) mesh.position.set(...pos);
-    if (rot) mesh.rotation.set(...rot);
-    if (scale) {
-        if (typeof scale === 'number') mesh.scale.setScalar(scale);
-        else mesh.scale.set(...scale);
+
+/** Convenience — create a mesh, position it, optionally rotate & scale. */
+function _mesh(geo, mat, pos, rot, scl) {
+    const m = new THREE.Mesh(geo, mat);
+    if (pos) m.position.set(pos[0], pos[1], pos[2]);
+    if (rot) m.rotation.set(rot[0], rot[1], rot[2]);
+    if (scl) {
+        if (typeof scl === 'number') m.scale.setScalar(scl);
+        else m.scale.set(scl[0], scl[1], scl[2]);
     }
-    if (shadow) { mesh.castShadow = true; mesh.receiveShadow = true; }
-    targetGroup.add(mesh);
-    return mesh;
+    return m;
+}
+
+/** Taper a BoxGeometry along +Z (front) by a given ratio. */
+function _taperBox(geo, zThreshold, xTaper, yTaper) {
+    const pos = geo.getAttribute('position');
+    const halfDepth = geo.parameters.depth / 2;
+    for (let i = 0; i < pos.count; i++) {
+        const z = pos.getZ(i);
+        if (z > zThreshold) {
+            const t = (z - zThreshold) / (halfDepth - zThreshold);
+            pos.setX(i, pos.getX(i) * (1 - t * xTaper));
+            pos.setY(i, pos.getY(i) * (1 - t * yTaper));
+        }
+    }
+    geo.computeVertexNormals();
+    return geo;
 }
 
 // ============================================================
-// SHIP MODEL BUILDER
+// SHIP MODEL
 // ============================================================
 
 export class ShipModel {
     /**
-     * @param {Object} options
-     * @param {THREE.Color} options.hullColor - Main hull color
-     * @param {THREE.Color} options.accentColor - Accent/trim color
-     * @param {THREE.Color} options.engineColor - Engine glow color
+     * @param {Object} opts
+     * @param {THREE.Color|number} opts.hullColor    Main hull plating
+     * @param {THREE.Color|number} opts.accentColor  Wing / trim accents
+     * @param {THREE.Color|number} opts.engineColor  Engine glow tint
      */
-    constructor(options = {}) {
-        this.hullColor   = options.hullColor   || new THREE.Color(0x5a6b7a);
-        this.accentColor = options.accentColor  || new THREE.Color(0xd4722a);
-        this.engineColor = options.engineColor  || new THREE.Color(0x33ccff);
+    constructor(opts = {}) {
+        this.hullColor   = new THREE.Color(opts.hullColor   ?? 0x5a6577);
+        this.accentColor = new THREE.Color(opts.accentColor ?? 0xb83232);
+        this.engineColor = new THREE.Color(opts.engineColor ?? 0x33ddff);
 
-        this.group = new THREE.Group();
-        this.engineGlows = [];       // Emissive exhaust discs
-        this.engineTrails = [];      // Particle trail meshes
-        this.landingGear = null;
-        this.cockpitFrame = null;
-        this.headlights = [];
+        this.group        = new THREE.Group();
+        this.engineGlows  = [];
+        this.runningLights = [];
+        this.landingGear  = null;
 
         this._build();
     }
 
-    // ========================================================
+    // --------------------------------------------------------
     // MATERIALS
-    // ========================================================
-    _createMaterials() {
-        // Main hull — semi-rough painted metal
-        this.hullMat = new THREE.MeshStandardMaterial({
-            color: this.hullColor,
+    // --------------------------------------------------------
+    _mats() {
+        const hull = new THREE.MeshLambertMaterial({ color: this.hullColor, flatShading: true });
+        const hullDark = new THREE.MeshLambertMaterial({
+            color: new THREE.Color(this.hullColor).multiplyScalar(0.6),
             flatShading: true,
-            roughness: 0.45,
-            metalness: 0.55,
         });
-
-        // Darker hull panels for visual break-up
-        this.panelMat = new THREE.MeshStandardMaterial({
-            color: this.hullColor.clone().multiplyScalar(0.7),
-            flatShading: true,
-            roughness: 0.5,
-            metalness: 0.6,
+        const accent = new THREE.MeshLambertMaterial({ color: this.accentColor, flatShading: true });
+        const trim = new THREE.MeshLambertMaterial({ color: 0x2a2f38, flatShading: true });
+        const chrome = new THREE.MeshLambertMaterial({ color: 0x8899aa, flatShading: true });
+        const glass = new THREE.MeshLambertMaterial({
+            color: 0x88ccff, transparent: true, opacity: 0.35,
         });
-
-        // Accent trim (wing edges, fin, stripes)
-        this.accentMat = new THREE.MeshStandardMaterial({
-            color: this.accentColor,
-            flatShading: true,
-            roughness: 0.35,
-            metalness: 0.5,
+        const glassDark = new THREE.MeshLambertMaterial({
+            color: 0x223344, transparent: true, opacity: 0.6,
         });
-
-        // Dark structural metal (landing gear, joints, intakes)
-        this.structMat = new THREE.MeshStandardMaterial({
-            color: 0x333840,
-            flatShading: true,
-            roughness: 0.6,
-            metalness: 0.7,
+        const engine = new THREE.MeshBasicMaterial({
+            color: this.engineColor, transparent: true, opacity: 0.85,
         });
-
-        // Cockpit glass — physically-based transparency
-        this.glassMat = new THREE.MeshPhysicalMaterial({
-            color: 0x88ccff,
-            transparent: true,
-            opacity: 0.25,
-            roughness: 0.05,
-            metalness: 0.05,
-            transmission: 0.85,
-            thickness: 0.4,
-            clearcoat: 1.0,
-            clearcoatRoughness: 0.05,
-            envMapIntensity: 1.5,
+        const engineInner = new THREE.MeshBasicMaterial({
+            color: 0xffffff, transparent: true, opacity: 0.9,
         });
-
-        // Engine glow (additive-like emissive)
-        this.engineMat = new THREE.MeshBasicMaterial({
-            color: this.engineColor,
-            transparent: true,
-            opacity: 0.9,
-        });
-
-        // Engine inner glow (brighter core)
-        this.engineCoreMat = new THREE.MeshBasicMaterial({
-            color: 0xffffff,
-            transparent: true,
-            opacity: 0.6,
-        });
-
-        // Emissive accent (running lights, cockpit glow strip)
-        this.emissiveMat = new THREE.MeshStandardMaterial({
-            color: this.accentColor,
-            emissive: this.accentColor,
-            emissiveIntensity: 2.0,
-            roughness: 0.3,
-            metalness: 0.2,
-        });
-
-        // Nav light — green (starboard) / red (port)
-        this.navGreenMat = new THREE.MeshBasicMaterial({ color: 0x00ff66 });
-        this.navRedMat   = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+        const lightRed = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+        const lightGreen = new THREE.MeshBasicMaterial({ color: 0x22ff44 });
+        const lightWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        return { hull, hullDark, accent, trim, chrome, glass, glassDark,
+                 engine, engineInner, lightRed, lightGreen, lightWhite };
     }
 
-    // ========================================================
-    // BUILD THE SHIP
-    // ========================================================
+    // --------------------------------------------------------
+    // BUILD
+    // --------------------------------------------------------
     _build() {
-        this._createMaterials();
+        const M = this._mats();
 
-        this._buildFuselage();
-        this._buildCockpit();
-        this._buildWings();
-        this._buildEngineNacelles();
-        this._buildDorsalFin();
-        this._buildVentralStabilisers();
-        this._buildHullDetails();
-        this._buildLandingGear();
+        this._buildFuselage(M);
+        this._buildNose(M);
+        this._buildCockpit(M);
+        this._buildWings(M);
+        this._buildNacelles(M);
+        this._buildDorsalFin(M);
+        this._buildVentralStrake(M);
+        this._buildRearSection(M);
+        this._buildHullDetail(M);
+        this._buildRunningLights(M);
+        this._buildLandingGear(M);
 
-        // Scale — ship is about 8m long at 1.0 scale
-        this.group.scale.setScalar(1.6);
+        // Scale the whole ship
+        this.group.scale.setScalar(1.5);
     }
 
-    // ---- FUSELAGE ----
-    _buildFuselage() {
-        // Main body — sculpted box
-        const fGeo = new THREE.BoxGeometry(2.0, 0.7, 5.5, 4, 2, 6);
-        const pos = fGeo.getAttribute('position');
+    // --------------------------------------------------------
+    // FUSELAGE — multi-layered hull
+    // --------------------------------------------------------
+    _buildFuselage(M) {
+        // Core fuselage — elongated, tapered front
+        const coreGeo = _taperBox(
+            new THREE.BoxGeometry(1.5, 0.65, 5.2, 1, 1, 4),
+            0.6, 0.45, 0.35
+        );
+        this.group.add(_mesh(coreGeo, M.hull, [0, 0, 0]));
 
-        for (let i = 0; i < pos.count; i++) {
-            let x = pos.getX(i);
-            let y = pos.getY(i);
-            let z = pos.getZ(i);
+        // Upper hull plate — sits slightly above core, shorter
+        const upperGeo = _taperBox(
+            new THREE.BoxGeometry(1.35, 0.12, 4.4, 1, 1, 3),
+            0.4, 0.5, 0.0
+        );
+        this.group.add(_mesh(upperGeo, M.hullDark, [0, 0.35, -0.2]));
 
-            // Nose taper (front z > 1.5)
-            if (z > 1.5) {
-                const t = (z - 1.5) / 1.25;
-                const taper = 1.0 - t * 0.55;
-                x *= taper;
-                y *= (taper * 0.6 + 0.4);
-            }
+        // Lower hull plate — flat belly panel
+        const lowerGeo = new THREE.BoxGeometry(1.3, 0.08, 4.0);
+        this.group.add(_mesh(lowerGeo, M.hullDark, [0, -0.35, -0.3]));
 
-            // Tail taper (rear z < -1.5)
-            if (z < -1.5) {
-                const t = (-1.5 - z) / 1.25;
-                const taper = 1.0 - t * 0.3;
-                x *= taper;
-            }
+        // Spine ridge — thin raised strip along centerline
+        const spineGeo = new THREE.BoxGeometry(0.12, 0.08, 3.6);
+        this.group.add(_mesh(spineGeo, M.accent, [0, 0.42, -0.5]));
 
-            // Raised spine — top vertices pushed up slightly toward rear
-            if (y > 0.1) {
-                const spineRaise = 0.15 * Math.max(0, 1.0 - (z + 1.0) / 4.0);
-                y += spineRaise;
-            }
+        // Side hull panels — left & right
+        for (const sign of [-1, 1]) {
+            const sideGeo = new THREE.BoxGeometry(0.08, 0.45, 4.2);
+            this.group.add(_mesh(sideGeo, M.hullDark, [sign * 0.78, 0.0, -0.2]));
 
-            // Flat belly
-            if (y < -0.1) {
-                y *= 0.65;
-            }
-
-            // Slight lateral pinch at center for aerodynamic look
-            const centerPinch = 1.0 - 0.08 * Math.exp(-z * z * 0.3);
-            x *= centerPinch;
-
-            pos.setXYZ(i, x, y, z);
+            // Side accent stripe
+            const stripeGeo = new THREE.BoxGeometry(0.03, 0.10, 3.6);
+            this.group.add(_mesh(stripeGeo, M.accent, [sign * 0.82, 0.12, -0.3]));
         }
 
-        fGeo.computeVertexNormals();
-        mergeInto(this.group, fGeo, this.hullMat, [0, 0, 0]);
-
-        // Belly plate — darker panel under the hull
-        const bellyGeo = new THREE.BoxGeometry(1.4, 0.06, 3.8);
-        mergeInto(this.group, bellyGeo, this.panelMat, [0, -0.28, -0.2]);
-
-        // Nose cap — accent-coloured tip
-        const noseCone = new THREE.ConeGeometry(0.25, 0.6, 6);
-        noseCone.rotateX(-Math.PI / 2);
-        mergeInto(this.group, noseCone, this.accentMat, [0, 0.05, 3.05]);
+        // Rear wall / engine bay housing
+        const rearGeo = new THREE.BoxGeometry(1.5, 0.6, 0.15);
+        this.group.add(_mesh(rearGeo, M.trim, [0, 0, -2.65]));
     }
 
-    // ---- COCKPIT ----
-    _buildCockpit() {
-        // Glass canopy — elongated half-sphere
-        const canopyGeo = new THREE.SphereGeometry(0.55, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.52);
-        const canopy = new THREE.Mesh(canopyGeo, this.glassMat);
-        canopy.position.set(0, 0.3, 1.5);
-        canopy.scale.set(0.9, 0.65, 1.4);
+    // --------------------------------------------------------
+    // NOSE CONE — pointed, with sensor tip
+    // --------------------------------------------------------
+    _buildNose(M) {
+        // Primary nose cone
+        const noseGeo = new THREE.ConeGeometry(0.35, 1.4, 6);
+        noseGeo.rotateX(-Math.PI / 2);
+        this.group.add(_mesh(noseGeo, M.hull, [0, 0.0, 3.3]));
+
+        // Secondary nose shroud — slightly wider, shorter, for layered look
+        const shroudGeo = new THREE.ConeGeometry(0.45, 0.8, 6);
+        shroudGeo.rotateX(-Math.PI / 2);
+        this.group.add(_mesh(shroudGeo, M.hullDark, [0, -0.02, 2.8]));
+
+        // Sensor dish at tip
+        const sensorGeo = new THREE.SphereGeometry(0.06, 6, 4);
+        this.group.add(_mesh(sensorGeo, M.chrome, [0, 0, 4.05]));
+
+        // Nose accent ring
+        const ringGeo = new THREE.TorusGeometry(0.32, 0.03, 4, 8);
+        this.group.add(_mesh(ringGeo, M.accent, [0, 0, 2.55], [Math.PI / 2, 0, 0]));
+
+        // Side intake slits
+        for (const sign of [-1, 1]) {
+            const intakeGeo = new THREE.BoxGeometry(0.06, 0.15, 0.6);
+            this.group.add(_mesh(intakeGeo, M.trim, [sign * 0.42, 0.0, 2.2]));
+            // Intake inner glow hint
+            const innerGeo = new THREE.BoxGeometry(0.03, 0.08, 0.5);
+            this.group.add(_mesh(innerGeo, M.engine, [sign * 0.42, 0.0, 2.2]));
+        }
+    }
+
+    // --------------------------------------------------------
+    // COCKPIT — bubble canopy with frame ribs
+    // --------------------------------------------------------
+    _buildCockpit(M) {
+        // Main canopy — hemisphere, stretched
+        const canopyGeo = new THREE.SphereGeometry(0.52, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.52);
+        const canopy = _mesh(canopyGeo, M.glass, [0, 0.28, 1.3], null, [1.0, 0.7, 1.35]);
         this.group.add(canopy);
 
-        // Cockpit frame struts — thin accent-coloured ribs over the glass
-        this.cockpitFrame = new THREE.Group();
-        const strutGeo = new THREE.BoxGeometry(0.04, 0.03, 1.4);
-        // Center rib (runs front-to-back over canopy)
-        mergeInto(this.cockpitFrame, strutGeo, this.structMat, [0, 0.62, 1.5], null, [1, 1, 1], false);
-        // Side ribs
-        const sideStrutGeo = new THREE.BoxGeometry(0.03, 0.45, 0.04);
-        mergeInto(this.cockpitFrame, sideStrutGeo, this.structMat, [0.35, 0.4, 1.8], [0.2, 0, 0], null, false);
-        mergeInto(this.cockpitFrame, sideStrutGeo, this.structMat, [-0.35, 0.4, 1.8], [-0.2, 0, 0], null, false);
-        // Rear frame
-        const rearFrameGeo = new THREE.BoxGeometry(0.9, 0.06, 0.04);
-        mergeInto(this.cockpitFrame, rearFrameGeo, this.structMat, [0, 0.35, 0.8], null, null, false);
-        this.group.add(this.cockpitFrame);
-
-        // Cockpit interior glow strip (emissive line under the glass)
-        const glowStripGeo = new THREE.BoxGeometry(0.5, 0.02, 0.8);
-        mergeInto(this.group, glowStripGeo, this.emissiveMat, [0, 0.22, 1.6], null, null, false);
-    }
-
-    // ---- WINGS ----
-    _buildWings() {
-        // Swept delta wings with thickness — using ExtrudeGeometry for proper 3D
-        const wingProfile = new THREE.Shape();
-        wingProfile.moveTo(0, 0);
-        wingProfile.lineTo(3.5, -0.15);   // Tip angled slightly down
-        wingProfile.lineTo(3.2, -0.8);    // Trailing edge swept back
-        wingProfile.lineTo(0.3, -1.6);    // Wing root trailing edge
-        wingProfile.lineTo(0, -1.2);      // Connect back
-        wingProfile.closePath();
-
-        const wingExtrude = { depth: 0.1, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.02, bevelSegments: 1 };
-        const wingGeo = new THREE.ExtrudeGeometry(wingProfile, wingExtrude);
-
-        // Right wing
-        const rWing = mergeInto(this.group, wingGeo, this.accentMat, [0.8, -0.12, 0.8], [0, 0, -0.03]);
-
-        // Left wing (mirrored)
-        const lWing = mergeInto(this.group, wingGeo, this.accentMat, [-0.8, -0.12, 0.8], [0, 0, 0.03], [-1, 1, 1]);
-
-        // Wing surface panels (dark stripe for visual detail)
-        const panelGeo = new THREE.BoxGeometry(2.2, 0.02, 0.4);
-        mergeInto(this.group, panelGeo, this.panelMat, [2.0, -0.14, 0.2], [0, 0, -0.03], null, false);
-        mergeInto(this.group, panelGeo, this.panelMat, [-2.0, -0.14, 0.2], [0, 0, 0.03], null, false);
-
-        // Wing tip fins — small vertical stabilisers at wing ends
-        const tipFinGeo = new THREE.BoxGeometry(0.06, 0.5, 0.45);
-        // Reshape: taper top
-        const tipPos = tipFinGeo.getAttribute('position');
-        for (let i = 0; i < tipPos.count; i++) {
-            if (tipPos.getY(i) > 0.1) {
-                tipPos.setZ(i, tipPos.getZ(i) * 0.5);
-            }
+        // Canopy frame ribs — 3 arcs over the bubble
+        const ribGeo = new THREE.TorusGeometry(0.50, 0.025, 4, 12, Math.PI);
+        for (let i = 0; i < 3; i++) {
+            const angle = -0.4 + i * 0.4;
+            const rib = _mesh(ribGeo, M.chrome, [0, 0.28, 1.3 + i * 0.18],
+                              [0, angle, 0], [1.0, 0.7, 0.7]);
+            this.group.add(rib);
         }
-        tipFinGeo.computeVertexNormals();
 
-        mergeInto(this.group, tipFinGeo, this.hullMat, [4.1, 0.05, 0.2]);
-        mergeInto(this.group, tipFinGeo, this.hullMat, [-4.1, 0.05, 0.2]);
+        // Canopy base ring
+        const baseRingGeo = new THREE.TorusGeometry(0.50, 0.035, 4, 12);
+        const baseRing = _mesh(baseRingGeo, M.trim, [0, 0.28, 1.3],
+                               [Math.PI / 2, 0, 0], [1.0, 1.35, 1.0]);
+        this.group.add(baseRing);
 
-        // Navigation lights on wing tips
-        const navGeo = new THREE.SphereGeometry(0.05, 4, 4);
-        mergeInto(this.group, navGeo, this.navGreenMat, [4.15, 0.05, 0.45], null, null, false);
-        mergeInto(this.group, navGeo, this.navRedMat, [-4.15, 0.05, 0.45], null, null, false);
+        // Interior hint — dark volume inside cockpit
+        const interiorGeo = new THREE.BoxGeometry(0.5, 0.15, 0.6);
+        this.group.add(_mesh(interiorGeo, M.glassDark, [0, 0.18, 1.3]));
+
+        // Headrest / seat back visible through glass
+        const seatGeo = new THREE.BoxGeometry(0.25, 0.25, 0.12);
+        this.group.add(_mesh(seatGeo, M.trim, [0, 0.22, 0.85]));
     }
 
-    // ---- ENGINE NACELLES ----
-    _buildEngineNacelles() {
-        // Two engine pods, mounted behind and below the wings
-        for (const side of [-1, 1]) {
-            const nacelle = new THREE.Group();
+    // --------------------------------------------------------
+    // WINGS — swept delta with leading-edge accents
+    // --------------------------------------------------------
+    _buildWings(M) {
+        for (const sign of [-1, 1]) {
+            // Main wing surface — extruded shape
+            const shape = new THREE.Shape();
+            shape.moveTo(0, 0);
+            shape.lineTo(3.2, -0.15);   // Tip leading edge
+            shape.lineTo(3.0, -0.35);   // Tip trailing edge
+            shape.lineTo(2.5, -1.3);    // Swept trailing edge
+            shape.lineTo(0, -0.9);      // Root trailing edge
+            shape.closePath();
 
-            // Engine housing — tapered cylinder
-            const housingGeo = new THREE.CylinderGeometry(0.25, 0.32, 1.6, 8);
-            housingGeo.rotateX(Math.PI / 2);
-            mergeInto(nacelle, housingGeo, this.hullMat, [0, 0, 0]);
+            const wingGeo = new THREE.ExtrudeGeometry(shape, {
+                depth: 0.10, bevelEnabled: false,
+            });
+            const wing = _mesh(wingGeo, M.hull, [sign * 0.65, -0.08, 0.7]);
+            wing.scale.x = sign;
+            this.group.add(wing);
 
-            // Intake scoop — wide opening at front
-            const intakeGeo = new THREE.CylinderGeometry(0.28, 0.2, 0.3, 8);
-            intakeGeo.rotateX(Math.PI / 2);
-            mergeInto(nacelle, intakeGeo, this.structMat, [0, 0, 0.9]);
+            // Wing upper panel — thin plate for layered look
+            const panelShape = new THREE.Shape();
+            panelShape.moveTo(0.2, -0.15);
+            panelShape.lineTo(2.6, -0.20);
+            panelShape.lineTo(2.2, -0.95);
+            panelShape.lineTo(0.2, -0.60);
+            panelShape.closePath();
 
-            // Intake inner ring (dark)
-            const innerGeo = new THREE.RingGeometry(0.08, 0.22, 8);
-            const innerMesh = mergeInto(nacelle, innerGeo, this.structMat, [0, 0, 1.05], null, null, false);
+            const panelGeo = new THREE.ExtrudeGeometry(panelShape, {
+                depth: 0.04, bevelEnabled: false,
+            });
+            const panel = _mesh(panelGeo, M.hullDark, [sign * 0.65, -0.02, 0.6]);
+            panel.scale.x = sign;
+            this.group.add(panel);
 
-            // Exhaust nozzle — wider at back
-            const nozzleGeo = new THREE.CylinderGeometry(0.32, 0.38, 0.3, 8);
-            nozzleGeo.rotateX(Math.PI / 2);
-            mergeInto(nacelle, nozzleGeo, this.structMat, [0, 0, -0.95]);
+            // Leading edge accent strip
+            const leShape = new THREE.Shape();
+            leShape.moveTo(0, 0.02);
+            leShape.lineTo(3.1, -0.12);
+            leShape.lineTo(3.2, -0.18);
+            leShape.lineTo(0, -0.04);
+            leShape.closePath();
 
-            // Engine glow disc (the main thruster glow)
-            const glowGeo = new THREE.CircleGeometry(0.3, 10);
-            const glow = new THREE.Mesh(glowGeo, this.engineMat.clone());
-            glow.position.set(0, 0, -1.12);
-            glow.rotation.y = Math.PI;
-            nacelle.add(glow);
+            const leGeo = new THREE.ExtrudeGeometry(leShape, {
+                depth: 0.04, bevelEnabled: false,
+            });
+            const le = _mesh(leGeo, M.accent, [sign * 0.65, -0.06, 0.72]);
+            le.scale.x = sign;
+            this.group.add(le);
+
+            // Wing root fairing — smooth blend to fuselage
+            const fairingGeo = new THREE.CylinderGeometry(0.18, 0.3, 0.9, 6);
+            fairingGeo.rotateZ(Math.PI / 2);
+            const fairing = _mesh(fairingGeo, M.hull,
+                [sign * 0.55, -0.12, 0.1]);
+            fairing.scale.x = sign;
+            this.group.add(fairing);
+
+            // Wing tip fin — small vertical stabiliser
+            const tipFinGeo = new THREE.BoxGeometry(0.05, 0.45, 0.5);
+            this.group.add(_mesh(tipFinGeo, M.hullDark,
+                [sign * 3.75, 0.05, 0.25]));
+
+            // Wing tip fin accent cap
+            const capGeo = new THREE.BoxGeometry(0.06, 0.06, 0.5);
+            this.group.add(_mesh(capGeo, M.accent,
+                [sign * 3.75, 0.28, 0.25]));
+
+            // Under-wing weapon hardpoint
+            const hardpointGeo = new THREE.BoxGeometry(0.12, 0.08, 0.4);
+            this.group.add(_mesh(hardpointGeo, M.trim,
+                [sign * 1.6, -0.28, 0.1]));
+        }
+    }
+
+    // --------------------------------------------------------
+    // ENGINE NACELLES — wing-mounted pods on pylons
+    // --------------------------------------------------------
+    _buildNacelles(M) {
+        for (const sign of [-1, 1]) {
+            const nx = sign * 2.3;
+            const ny = -0.12;
+            const nz = -0.5;
+
+            // Pylon connecting nacelle to wing
+            const pylonGeo = new THREE.BoxGeometry(0.08, 0.28, 0.7);
+            this.group.add(_mesh(pylonGeo, M.hull, [nx, ny + 0.1, nz + 0.1]));
+
+            // Main nacelle body
+            const bodyGeo = new THREE.CylinderGeometry(0.22, 0.26, 1.5, 8);
+            bodyGeo.rotateX(Math.PI / 2);
+            this.group.add(_mesh(bodyGeo, M.hull, [nx, ny, nz]));
+
+            // Nacelle front intake cone
+            const intakeGeo = new THREE.ConeGeometry(0.20, 0.4, 8);
+            intakeGeo.rotateX(-Math.PI / 2);
+            this.group.add(_mesh(intakeGeo, M.trim, [nx, ny, nz + 1.0]));
+
+            // Intake ring
+            const iRingGeo = new THREE.TorusGeometry(0.22, 0.025, 4, 8);
+            this.group.add(_mesh(iRingGeo, M.chrome,
+                [nx, ny, nz + 0.75], [Math.PI / 2, 0, 0]));
+
+            // Nacelle rear housing — wider, for exhaust
+            const rearGeo = new THREE.CylinderGeometry(0.28, 0.24, 0.3, 8);
+            rearGeo.rotateX(Math.PI / 2);
+            this.group.add(_mesh(rearGeo, M.hullDark, [nx, ny, nz - 0.85]));
+
+            // Exhaust nozzle ring
+            const nozzleGeo = new THREE.TorusGeometry(0.25, 0.03, 4, 8);
+            this.group.add(_mesh(nozzleGeo, M.trim,
+                [nx, ny, nz - 1.0], [Math.PI / 2, 0, 0]));
+
+            // Engine glow disc — outer
+            const glowGeo = new THREE.CircleGeometry(0.24, 10);
+            const glow = _mesh(glowGeo, M.engine, [nx, ny, nz - 1.02],
+                               [0, Math.PI, 0]);
+            this.group.add(glow);
             this.engineGlows.push(glow);
 
-            // Engine core (brighter inner glow)
-            const coreGeo = new THREE.CircleGeometry(0.14, 8);
-            const core = new THREE.Mesh(coreGeo, this.engineCoreMat.clone());
-            core.position.set(0, 0, -1.11);
-            core.rotation.y = Math.PI;
-            nacelle.add(core);
-            this.engineGlows.push(core); // Also pulsed
+            // Engine glow disc — inner bright core
+            const coreGeo = new THREE.CircleGeometry(0.12, 8);
+            const core = _mesh(coreGeo, M.engineInner, [nx, ny, nz - 1.03],
+                               [0, Math.PI, 0]);
+            this.group.add(core);
+            this.engineGlows.push(core);
 
-            // Pylon connecting nacelle to fuselage
-            const pylonGeo = new THREE.BoxGeometry(0.5, 0.08, 0.6);
-            mergeInto(nacelle, pylonGeo, this.panelMat, [side * -0.4, 0.15, 0]);
+            // Heat dissipation fins (3 per nacelle)
+            for (let f = 0; f < 3; f++) {
+                const angle = (f / 3) * Math.PI * 2;
+                const finGeo = new THREE.BoxGeometry(0.03, 0.08, 0.25);
+                const fin = _mesh(finGeo, M.accent,
+                    [nx + Math.cos(angle) * 0.28, ny + Math.sin(angle) * 0.28, nz - 0.6]);
+                fin.rotation.z = angle;
+                this.group.add(fin);
+            }
 
-            // Position nacelle
-            nacelle.position.set(side * 1.3, -0.2, -1.7);
-            this.group.add(nacelle);
+            // Nacelle accent stripe
+            const stripeGeo = new THREE.BoxGeometry(0.03, 0.04, 1.2);
+            this.group.add(_mesh(stripeGeo, M.accent, [nx, ny + 0.26, nz]));
         }
     }
 
-    // ---- DORSAL FIN ----
-    _buildDorsalFin() {
-        // Main tall fin on top
-        const finShape = new THREE.Shape();
-        finShape.moveTo(0, 0);
-        finShape.lineTo(0.1, 0.9);      // Top front
-        finShape.lineTo(-0.6, 0.7);     // Top rear (swept)
-        finShape.lineTo(-0.8, 0);       // Bottom rear
-        finShape.closePath();
+    // --------------------------------------------------------
+    // DORSAL FIN — tall swept stabiliser
+    // --------------------------------------------------------
+    _buildDorsalFin(M) {
+        // Main fin body — extruded shape
+        const shape = new THREE.Shape();
+        shape.moveTo(0, 0);
+        shape.lineTo(0, 1.1);       // Top
+        shape.lineTo(-0.7, 0.6);    // Swept tip
+        shape.lineTo(-1.0, 0);      // Trailing edge
+        shape.closePath();
 
-        const finExtrude = { depth: 0.05, bevelEnabled: false };
-        const finGeo = new THREE.ExtrudeGeometry(finShape, finExtrude);
-        const fin = mergeInto(this.group, finGeo, this.accentMat, [0.025, 0.35, -0.8], [0, Math.PI / 2, 0]);
+        const finGeo = new THREE.ExtrudeGeometry(shape, {
+            depth: 0.06, bevelEnabled: false,
+        });
+        this.group.add(_mesh(finGeo, M.hull, [0, 0.3, -0.8],
+            [0, Math.PI / 2, 0], [1, 1, 1]));
 
-        // Accent stripe on fin
-        const stripeGeo = new THREE.BoxGeometry(0.04, 0.55, 0.08);
-        mergeInto(this.group, stripeGeo, this.emissiveMat, [0, 0.75, -1.0], null, null, false);
+        // Fin leading edge accent
+        const leShape = new THREE.Shape();
+        leShape.moveTo(0, 0);
+        leShape.lineTo(0, 1.05);
+        leShape.lineTo(0, 0.95);
+        leShape.lineTo(-0.15, 0);
+        leShape.closePath();
+
+        const leGeo = new THREE.ExtrudeGeometry(leShape, {
+            depth: 0.07, bevelEnabled: false,
+        });
+        this.group.add(_mesh(leGeo, M.accent, [0, 0.32, -0.78],
+            [0, Math.PI / 2, 0]));
+
+        // Fin tip cap
+        const capGeo = new THREE.SphereGeometry(0.05, 4, 4);
+        this.group.add(_mesh(capGeo, M.chrome, [0, 1.42, -0.8]));
+
+        // Antenna mast on top
+        const antennaGeo = new THREE.CylinderGeometry(0.01, 0.015, 0.35, 4);
+        this.group.add(_mesh(antennaGeo, M.chrome, [0, 1.6, -0.8]));
     }
 
-    // ---- VENTRAL STABILISERS ----
-    _buildVentralStabilisers() {
-        // Two small angled fins under the rear fuselage
-        const vFinGeo = new THREE.BoxGeometry(0.04, 0.35, 0.5);
-        // Taper
-        const vp = vFinGeo.getAttribute('position');
-        for (let i = 0; i < vp.count; i++) {
-            if (vp.getY(i) < -0.1) {
-                vp.setZ(i, vp.getZ(i) * 0.6);
+    // --------------------------------------------------------
+    // VENTRAL STRAKE — small belly fin
+    // --------------------------------------------------------
+    _buildVentralStrake(M) {
+        const shape = new THREE.Shape();
+        shape.moveTo(0, 0);
+        shape.lineTo(0, -0.35);
+        shape.lineTo(-0.5, -0.1);
+        shape.lineTo(-0.6, 0);
+        shape.closePath();
+
+        const geo = new THREE.ExtrudeGeometry(shape, {
+            depth: 0.05, bevelEnabled: false,
+        });
+        this.group.add(_mesh(geo, M.hullDark, [0, -0.32, -0.6],
+            [0, Math.PI / 2, 0]));
+    }
+
+    // --------------------------------------------------------
+    // REAR SECTION — central exhaust + structural detail
+    // --------------------------------------------------------
+    _buildRearSection(M) {
+        // Central thruster housing
+        const housingGeo = new THREE.CylinderGeometry(0.30, 0.35, 0.6, 8);
+        housingGeo.rotateX(Math.PI / 2);
+        this.group.add(_mesh(housingGeo, M.trim, [0, 0, -2.5]));
+
+        // Central exhaust nozzle ring
+        const nozzleGeo = new THREE.TorusGeometry(0.32, 0.035, 4, 10);
+        this.group.add(_mesh(nozzleGeo, M.chrome,
+            [0, 0, -2.82], [Math.PI / 2, 0, 0]));
+
+        // Central engine glow
+        const glowGeo = new THREE.CircleGeometry(0.30, 10);
+        const glow = _mesh(glowGeo, M.engine, [0, 0, -2.84],
+                           [0, Math.PI, 0]);
+        this.group.add(glow);
+        this.engineGlows.push(glow);
+
+        const coreGeo = new THREE.CircleGeometry(0.15, 8);
+        const core = _mesh(coreGeo, M.engineInner, [0, 0, -2.85],
+                           [0, Math.PI, 0]);
+        this.group.add(core);
+        this.engineGlows.push(core);
+
+        // Rear cross-braces
+        for (const sign of [-1, 1]) {
+            const braceGeo = new THREE.BoxGeometry(0.6, 0.06, 0.08);
+            this.group.add(_mesh(braceGeo, M.trim,
+                [sign * 0.4, 0.15, -2.4]));
+            this.group.add(_mesh(braceGeo, M.trim,
+                [sign * 0.4, -0.15, -2.4]));
+        }
+
+        // Rear hull taper plates
+        for (const sign of [-1, 1]) {
+            const plateGeo = new THREE.BoxGeometry(0.1, 0.5, 0.8);
+            this.group.add(_mesh(plateGeo, M.hullDark,
+                [sign * 0.6, 0, -2.3]));
+        }
+    }
+
+    // --------------------------------------------------------
+    // HULL DETAIL — panel lines, greebles, structural ribs
+    // --------------------------------------------------------
+    _buildHullDetail(M) {
+        // Cross-fuselage panel lines (ribs)
+        for (let i = 0; i < 5; i++) {
+            const z = 1.8 - i * 0.9;
+            const ribGeo = new THREE.BoxGeometry(1.55, 0.04, 0.03);
+            this.group.add(_mesh(ribGeo, M.trim, [0, 0.33, z]));
+        }
+
+        // Side vent greebles
+        for (const sign of [-1, 1]) {
+            // Forward vent
+            const ventGeo = new THREE.BoxGeometry(0.04, 0.12, 0.35);
+            this.group.add(_mesh(ventGeo, M.trim,
+                [sign * 0.80, 0.0, 1.6]));
+
+            // Mid greeble box
+            const greeble1 = new THREE.BoxGeometry(0.06, 0.10, 0.20);
+            this.group.add(_mesh(greeble1, M.chrome,
+                [sign * 0.82, -0.10, 0.5]));
+
+            // Rear vent
+            const greeble2 = new THREE.BoxGeometry(0.04, 0.08, 0.30);
+            this.group.add(_mesh(greeble2, M.trim,
+                [sign * 0.80, 0.0, -1.2]));
+
+            // Lower hull tech panels
+            for (let p = 0; p < 3; p++) {
+                const pz = 1.0 - p * 0.8;
+                const techGeo = new THREE.BoxGeometry(0.35, 0.03, 0.25);
+                this.group.add(_mesh(techGeo, M.trim,
+                    [sign * 0.35, -0.36, pz]));
             }
         }
-        vFinGeo.computeVertexNormals();
 
-        mergeInto(this.group, vFinGeo, this.hullMat, [0.6, -0.45, -2.0], [0, 0, 0.3]);
-        mergeInto(this.group, vFinGeo, this.hullMat, [-0.6, -0.45, -2.0], [0, 0, -0.3]);
+        // Top sensor blister
+        const blisterGeo = new THREE.SphereGeometry(0.12, 6, 4, 0, Math.PI * 2, 0, Math.PI / 2);
+        this.group.add(_mesh(blisterGeo, M.chrome, [0, 0.42, 0.4]));
+
+        // Forward accent chevron on upper hull
+        const chevronShape = new THREE.Shape();
+        chevronShape.moveTo(0, 0);
+        chevronShape.lineTo(0.45, -0.25);
+        chevronShape.lineTo(0.40, -0.25);
+        chevronShape.lineTo(0, -0.04);
+        chevronShape.lineTo(-0.40, -0.25);
+        chevronShape.lineTo(-0.45, -0.25);
+        chevronShape.closePath();
+
+        const chevronGeo = new THREE.ExtrudeGeometry(chevronShape, {
+            depth: 0.02, bevelEnabled: false,
+        });
+        this.group.add(_mesh(chevronGeo, M.accent, [0, 0.42, 1.7],
+            [Math.PI / 2, 0, 0]));
     }
 
-    // ---- HULL DETAILS (panel lines, greebles, vents) ----
-    _buildHullDetails() {
-        // Panel line grooves (thin dark strips)
-        const lineGeo = new THREE.BoxGeometry(0.02, 0.02, 2.5);
+    // --------------------------------------------------------
+    // RUNNING LIGHTS — red port, green starboard, white tail
+    // --------------------------------------------------------
+    _buildRunningLights(M) {
+        const lightGeo = new THREE.SphereGeometry(0.035, 4, 4);
 
-        // Dorsal panel lines
-        mergeInto(this.group, lineGeo, this.structMat, [0.5, 0.34, 0], null, null, false);
-        mergeInto(this.group, lineGeo, this.structMat, [-0.5, 0.34, 0], null, null, false);
+        // Port (left) — red
+        const portLight = _mesh(lightGeo, M.lightRed, [-3.75, 0.30, 0.25]);
+        this.group.add(portLight);
+        this.runningLights.push(portLight);
 
-        // Side panel lines (horizontal)
-        const sideLineGeo = new THREE.BoxGeometry(0.02, 0.02, 3.5);
-        mergeInto(this.group, sideLineGeo, this.structMat, [0.95, 0.05, -0.3], null, null, false);
-        mergeInto(this.group, sideLineGeo, this.structMat, [-0.95, 0.05, -0.3], null, null, false);
+        // Starboard (right) — green
+        const stbdLight = _mesh(lightGeo, M.lightGreen, [3.75, 0.30, 0.25]);
+        this.group.add(stbdLight);
+        this.runningLights.push(stbdLight);
 
-        // Thruster vents (small rectangular openings on top-rear)
-        const ventGeo = new THREE.BoxGeometry(0.15, 0.04, 0.25);
-        mergeInto(this.group, ventGeo, this.structMat, [0.3, 0.36, -1.5], null, null, false);
-        mergeInto(this.group, ventGeo, this.structMat, [-0.3, 0.36, -1.5], null, null, false);
+        // Tail — white
+        const tailLight = _mesh(lightGeo, M.lightWhite, [0, 0.55, -2.3]);
+        this.group.add(tailLight);
+        this.runningLights.push(tailLight);
 
-        // Antenna nub on nose
-        const antennaGeo = new THREE.CylinderGeometry(0.01, 0.02, 0.25, 4);
-        mergeInto(this.group, antennaGeo, this.structMat, [0, 0.2, 2.8], null, null, false);
-
-        // Belly intake scoops
-        const scoopGeo = new THREE.BoxGeometry(0.3, 0.08, 0.5);
-        mergeInto(this.group, scoopGeo, this.structMat, [0.4, -0.32, 0.5]);
-        mergeInto(this.group, scoopGeo, this.structMat, [-0.4, -0.32, 0.5]);
-
-        // Rear tail light (white)
-        const tailLightGeo = new THREE.SphereGeometry(0.04, 4, 4);
-        const tailLightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        mergeInto(this.group, tailLightGeo, tailLightMat, [0, 0.35, -2.7], null, null, false);
+        // Nose tip light — white
+        const noseLight = _mesh(lightGeo, M.lightWhite, [0, 0.08, 3.95]);
+        this.group.add(noseLight);
+        this.runningLights.push(noseLight);
     }
 
-    // ---- LANDING GEAR ----
-    _buildLandingGear() {
+    // --------------------------------------------------------
+    // LANDING GEAR — 3 articulated struts with pads
+    // --------------------------------------------------------
+    _buildLandingGear(M) {
         this.landingGear = new THREE.Group();
 
-        const legMat = this.structMat;
-        const padGeo = new THREE.CylinderGeometry(0.12, 0.14, 0.04, 8);
-        const strutGeo = new THREE.CylinderGeometry(0.035, 0.04, 0.65, 5);
-        const shockGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.25, 5);
+        const strutMat = new THREE.MeshLambertMaterial({ color: 0x3a3a3a });
+        const padMat   = new THREE.MeshLambertMaterial({ color: 0x555555 });
+        const pistonMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
 
-        // 3-point landing gear: 2 front, 1 rear
-        const gearPositions = [
-            { pos: [0.7, -0.55, 1.0], label: 'front-right' },
-            { pos: [-0.7, -0.55, 1.0], label: 'front-left' },
-            { pos: [0, -0.55, -1.8], label: 'rear-center' },
+        const positions = [
+            { x:  0.7, z:  1.2, name: 'front-right' },
+            { x: -0.7, z:  1.2, name: 'front-left'  },
+            { x:  0,   z: -2.0, name: 'rear-center'  },
         ];
 
-        for (const gear of gearPositions) {
-            const [gx, gy, gz] = gear.pos;
+        for (const pos of positions) {
+            // Upper strut
+            const upperGeo = new THREE.CylinderGeometry(0.04, 0.035, 0.35, 5);
+            const upper = _mesh(upperGeo, strutMat, [pos.x, -0.5, pos.z]);
+            this.landingGear.add(upper);
 
-            // Main strut
-            const strut = new THREE.Mesh(strutGeo, legMat);
-            strut.position.set(gx, gy, gz);
-            strut.castShadow = true;
-            this.landingGear.add(strut);
+            // Hydraulic piston (inner)
+            const pistonGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.25, 4);
+            const piston = _mesh(pistonGeo, pistonMat, [pos.x, -0.75, pos.z]);
+            this.landingGear.add(piston);
 
-            // Shock absorber (wider cylinder overlapping strut top)
-            const shock = new THREE.Mesh(shockGeo, legMat);
-            shock.position.set(gx, gy + 0.25, gz);
-            this.landingGear.add(shock);
+            // Lower strut
+            const lowerGeo = new THREE.CylinderGeometry(0.035, 0.04, 0.2, 5);
+            const lower = _mesh(lowerGeo, strutMat, [pos.x, -0.92, pos.z]);
+            this.landingGear.add(lower);
 
             // Foot pad
-            const pad = new THREE.Mesh(padGeo, legMat);
-            pad.position.set(gx, gy - 0.34, gz);
-            pad.castShadow = true;
+            const padGeo = new THREE.CylinderGeometry(0.12, 0.14, 0.04, 8);
+            const pad = _mesh(padGeo, padMat, [pos.x, -1.04, pos.z]);
             this.landingGear.add(pad);
+
+            // Mounting bracket at hull
+            const bracketGeo = new THREE.BoxGeometry(0.15, 0.08, 0.15);
+            const bracket = _mesh(bracketGeo, strutMat, [pos.x, -0.34, pos.z]);
+            this.landingGear.add(bracket);
         }
 
         this.group.add(this.landingGear);
     }
 
-    // ========================================================
-    // RUNTIME UPDATES
-    // ========================================================
+    // ============================================================
+    // PUBLIC API (unchanged contract)
+    // ============================================================
 
     /**
-     * Update engine glow based on thrust.
-     * @param {number} thrust - 0 to 1
-     * @param {number} time - elapsed time for pulse
+     * Animate engine glow based on thrust level.
+     * @param {number} thrust 0–1
+     * @param {number} time   elapsed seconds (for pulse)
      */
     updateEngines(thrust, time) {
         for (let i = 0; i < this.engineGlows.length; i++) {
             const glow = this.engineGlows[i];
-            const isCore = i % 2 === 1; // Every other entry is the bright core
-
+            const isCore = i % 2 === 1; // every other glow is an inner core
             const pulse = 0.7 + Math.sin(time * 12 + i * 0.5) * 0.15;
             const intensity = thrust * pulse;
-
-            if (isCore) {
-                glow.material.opacity = 0.2 + intensity * 0.8;
-                glow.scale.setScalar(0.6 + intensity * 0.6);
-            } else {
-                glow.material.opacity = 0.3 + intensity * 0.7;
-                glow.scale.setScalar(0.8 + intensity * 0.4);
-            }
+            glow.material.opacity = (isCore ? 0.4 : 0.25) + intensity * 0.6;
+            glow.scale.setScalar((isCore ? 0.6 : 0.8) + intensity * 0.5);
         }
     }
 
-    /**
-     * Show/hide landing gear.
-     */
+    /** Show / hide landing gear. */
     setLandingGear(deployed) {
-        if (this.landingGear) {
-            this.landingGear.visible = deployed;
-        }
+        if (this.landingGear) this.landingGear.visible = deployed;
     }
 
-    /**
-     * Add to scene.
-     */
-    addToScene(scene) {
-        scene.add(this.group);
-    }
+    /** Add ship group to a Three.js scene. */
+    addToScene(scene) { scene.add(this.group); }
 
-    removeFromScene(scene) {
-        scene.remove(this.group);
-    }
+    /** Remove ship group from scene. */
+    removeFromScene(scene) { scene.remove(this.group); }
 
+    /** Dispose all geometry and materials. */
     dispose() {
         this.group.traverse(child => {
             if (child.geometry) child.geometry.dispose();
-            if (child.material) {
-                if (Array.isArray(child.material)) {
-                    child.material.forEach(m => m.dispose());
-                } else {
-                    child.material.dispose();
-                }
-            }
+            if (child.material) child.material.dispose();
         });
     }
 }

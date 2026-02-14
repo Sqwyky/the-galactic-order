@@ -135,6 +135,12 @@ export class ShipHUD {
                 top: 60px;
                 left: 20px;
             ">
+                <div style="
+                    color: #557766;
+                    font-size: 10px;
+                    letter-spacing: 2px;
+                    margin-bottom: 2px;
+                ">VOIDMOTH Mk-I</div>
                 <div id="ship-phase" style="
                     color: #00ff88;
                     font-size: 12px;
@@ -179,7 +185,7 @@ export class ShipHUD {
                 transition: opacity 0.3s;
                 text-shadow: 0 0 10px rgba(0,255,136,0.3);
             ">
-                PRESS <span style="border: 1px solid rgba(0,255,136,0.4); padding: 2px 8px;">E</span> TO BOARD SHIP
+                PRESS <span style="border: 1px solid rgba(0,255,136,0.4); padding: 2px 8px;">E</span> TO BOARD <span style="color: #557766;">VOIDMOTH</span>
             </div>
         `;
 

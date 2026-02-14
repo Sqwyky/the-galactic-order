@@ -22,12 +22,12 @@ import * as THREE from 'three';
 // ============================================================
 
 const PARTICLE_CONFIG = {
-    count: 300,          // total particles in the cloud
-    radius: 40,          // spread radius around camera (meters)
-    baseSize: 2.5,       // base point size
+    count: 400,          // total particles in the cloud (richer atmosphere)
+    radius: 50,          // spread radius around camera (meters)
+    baseSize: 2.8,       // base point size (slightly larger for visibility)
     driftSpeed: 0.3,     // how fast particles move
     fadeNear: 2,         // fade out particles very close to camera
-    fadeFar: 35,         // fade out particles far from camera
+    fadeFar: 45,         // fade out particles far from camera
 };
 
 // ============================================================
@@ -65,8 +65,7 @@ function createParticleMaterial(color, fogColor, fogDensity) {
                 pos.z += cos(t * 0.6 + aPhase * 0.7) * 2.0;
 
                 // Wrap particles around camera (infinite cloud effect)
-                // Particles that drift too far get teleported to the other side
-                float radius = 40.0;
+                float radius = 50.0;
                 vec3 offset = pos - uCameraPos;
                 offset = mod(offset + radius, radius * 2.0) - radius;
                 pos = uCameraPos + offset;
@@ -77,7 +76,7 @@ function createParticleMaterial(color, fogColor, fogDensity) {
                 // Distance-based alpha (fade near and far)
                 float dist = length(offset);
                 float nearFade = smoothstep(2.0, 5.0, dist);
-                float farFade = smoothstep(38.0, 25.0, dist);
+                float farFade = smoothstep(48.0, 30.0, dist);
                 vAlpha = nearFade * farFade;
 
                 gl_Position = projectionMatrix * mvPosition;

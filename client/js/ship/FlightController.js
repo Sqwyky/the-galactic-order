@@ -1,61 +1,132 @@
 /**
- * THE GALACTIC ORDER - Ship Flight Controller
+ * THE GALACTIC ORDER - Ship Flight Controller (Pioneer-Style Thruster Physics)
  *
- * Handles all ship flight physics and input. Mirrors WalkingController's
- * enable()/disable()/update(dt) pattern for clean phase switching.
+ * Upgraded with Pioneer Space Sim's thruster-based flight model:
+ *
+ * Pioneer models individual thrusters on the ship — main engine,
+ * retro rockets, lateral jets, and rotational thrusters. Each has
+ * its own force and fuel consumption. This gives the ship a much
+ * more realistic, weighty feel compared to simple velocity changes.
+ *
+ * Key differences from the original:
+ * 1. 6DOF (six degrees of freedom) — translate + rotate on all axes
+ * 2. Angular momentum — ship keeps spinning until counter-thrust
+ * 3. Individual thruster forces (not just "move forward")
+ * 4. Fuel system — thrusters consume fuel, no fuel = no thrust
+ * 5. Thruster response delay — thrusters spool up, not instant
  *
  * Controls:
- *   WASD      — Forward / Strafe Left / Brake / Strafe Right
- *   Shift     — Boosters (3x thrust)
- *   Alt       — Free look (orbit camera without turning ship)
- *   Mouse     — Steer ship (pitch + yaw)
- *   E         — Exit ship (handled externally in landing.html)
+ *   W/S         — Main / Retro thrust
+ *   A/D         — Lateral (strafe) thrust
+ *   R/F         — Vertical thrust (up/down)
+ *   Shift       — Afterburner (3x main thrust, 5x fuel burn)
+ *   Alt         — Free look (orbit camera without turning ship)
+ *   Mouse       — Pitch + Yaw (rotational thrusters)
+ *   Q/E         — Roll (rotational thrusters)
+ *   E           — Exit ship (handled externally)
  *
- * Physics: acceleration-based with drag for smooth, NMS-style flight feel.
+ * Physics: Pioneer-style Newtonian with thruster forces.
  * Camera is parented to ship group for natural cockpit movement.
  */
 
 import * as THREE from 'three';
 
 // ============================================================
-// CONFIGURATION
+// THRUSTER CONFIGURATION (Pioneer-inspired)
 // ============================================================
+
+/**
+ * Each thruster group has:
+ * - force: Newtons of thrust
+ * - fuelRate: kg/s fuel consumption
+ * - spoolTime: seconds to reach full thrust from zero
+ */
+export const THRUSTER_CONFIG = {
+    // Main engine (rear-facing, pushes ship forward)
+    main: {
+        force: 50.0,          // m/s² (assuming unit mass ship)
+        fuelRate: 1.0,        // fuel units per second
+        spoolTime: 0.15,      // seconds to full power
+    },
+    // Retro rockets (forward-facing, slows ship down)
+    retro: {
+        force: 40.0,
+        fuelRate: 0.8,
+        spoolTime: 0.1,
+    },
+    // Lateral thrusters (left/right strafe)
+    lateral: {
+        force: 30.0,
+        fuelRate: 0.5,
+        spoolTime: 0.08,
+    },
+    // Vertical thrusters (up/down)
+    vertical: {
+        force: 25.0,
+        fuelRate: 0.5,
+        spoolTime: 0.08,
+    },
+    // Rotational thrusters (pitch, yaw, roll)
+    rotation: {
+        pitchForce: 1.5,      // rad/s² angular acceleration
+        yawForce: 1.5,
+        rollForce: 2.0,
+        fuelRate: 0.2,
+        spoolTime: 0.05,
+    },
+    // Afterburner (multiplies main engine)
+    afterburner: {
+        thrustMultiplier: 3.0,
+        fuelMultiplier: 5.0,
+    },
+};
 
 export const FLIGHT_CONFIG = {
     // Thrust
-    forwardThrust: 50.0,      // m/s² acceleration
-    strafeThrust: 30.0,       // m/s² strafe acceleration
-    brakeForce: 40.0,         // m/s² deceleration
-    boostMultiplier: 3.0,     // Shift multiplier
+    forwardThrust: 50.0,
+    strafeThrust: 30.0,
+    brakeForce: 40.0,
+    boostMultiplier: 3.0,
+    verticalThrust: 25.0,
 
     // Speed limits
-    maxSpeed: 80.0,           // m/s normal
-    maxBoostSpeed: 200.0,     // m/s with boost
-    verticalSpeed: 25.0,      // m/s up/down (R/F keys or auto-altitude)
+    maxSpeed: 80.0,
+    maxBoostSpeed: 200.0,
+    verticalSpeed: 25.0,
 
-    // Drag (0 = no drag, 1 = instant stop)
-    linearDrag: 0.6,          // Velocity decay per second (smooth deceleration)
+    // Drag — Pioneer uses very low drag (space is a vacuum)
+    // We keep some drag for game feel but less than before
+    linearDrag: 0.3,          // Reduced from 0.6 — more Newtonian
+    angularDrag: 2.0,         // Angular velocity decay (stabilization thrusters)
 
-    // Steering
+    // Steering — now driven by rotational thrusters
     mouseSensitivity: 0.0015,
-    pitchSpeed: 1.5,          // rad/s max pitch rate
-    yawSpeed: 1.5,            // rad/s max yaw rate
-    rollOnStrafe: 0.4,        // radians bank angle when strafing
-    rollReturnSpeed: 3.0,     // How fast roll returns to 0
+    pitchSpeed: 1.5,
+    yawSpeed: 1.5,
+    rollSpeed: 2.0,           // Q/E roll
+    rollOnStrafe: 0.4,
+    rollReturnSpeed: 3.0,
 
     // Camera
-    cockpitOffset: new THREE.Vector3(0, 0.6, 1.8), // Local offset from ship center
+    cockpitOffset: new THREE.Vector3(0, 0.6, 1.8),
     freeLookSpeed: 0.003,
-    freeLookMaxAngle: Math.PI * 0.6,  // Max free-look angle
-    freeLookReturnSpeed: 5.0,         // Slerp speed back to forward
+    freeLookMaxAngle: Math.PI * 0.6,
+    freeLookReturnSpeed: 5.0,
 
     // Ground collision
-    minAltitude: 3.0,         // Minimum height above terrain
-    groundPushForce: 20.0,    // How fast it pushes up when too low
+    minAltitude: 3.0,
+    groundPushForce: 20.0,
 
     // Landing
-    landingDescentSpeed: 8.0, // m/s during auto-land
-    landingHeight: 2.5,       // Height above ground when landed
+    landingDescentSpeed: 8.0,
+    landingHeight: 2.5,
+
+    // Fuel system
+    maxFuel: 100.0,
+    fuelRegenRate: 0.0,       // No passive regen — must refuel
+
+    // Thruster response (Pioneer spool-up)
+    thrusterSpoolRate: 8.0,   // How fast thrusters reach target (per second)
 };
 
 // ============================================================
@@ -79,13 +150,32 @@ export class FlightController {
         // State
         this.enabled = false;
         this.velocity = new THREE.Vector3();
-        this.speed = 0; // scalar speed for HUD
+        this.angularVelocity = new THREE.Vector3(); // Pioneer: angular momentum
+        this.speed = 0;
         this.altitude = 0;
-        this.thrust = 0; // 0-1 for engine glow
+        this.thrust = 0;
+
+        // Fuel system (Pioneer-inspired)
+        this.fuel = this.config.maxFuel;
+
+        // Thruster spool states (0 = off, 1 = full)
+        // Pioneer models individual thruster response times
+        this.thrusterStates = {
+            main: 0,
+            retro: 0,
+            lateralLeft: 0,
+            lateralRight: 0,
+            verticalUp: 0,
+            verticalDown: 0,
+            pitch: 0,
+            yaw: 0,
+            roll: 0,
+        };
 
         // Steering
         this.pitchInput = 0;
         this.yawInput = 0;
+        this.rollInput = 0;     // Q/E roll control
         this.targetRoll = 0;
         this.currentRoll = 0;
 
@@ -97,21 +187,26 @@ export class FlightController {
         // Landing state
         this.isLanding = false;
         this.hasLanded = false;
-        this.onLanded = null; // Callback when landing complete
+        this.onLanded = null;
 
         // Input
         this.keys = {};
         this.isPointerLocked = false;
         this.isBoosting = false;
 
+        // Touch input support
+        this.touchInput = { x: 0, z: 0, yaw: 0, pitch: 0, boost: false, vertical: 0 };
+
         // Reusable vectors
         this._forward = new THREE.Vector3();
         this._right = new THREE.Vector3();
         this._up = new THREE.Vector3(0, 1, 0);
+        this._shipUp = new THREE.Vector3();
         this._worldPos = new THREE.Vector3();
         this._tempQuat = new THREE.Quaternion();
         this._targetQuat = new THREE.Quaternion();
         this._euler = new THREE.Euler(0, 0, 0, 'YXZ');
+        this._thrustAccel = new THREE.Vector3();
 
         // Bind handlers
         this._onKeyDown = this._onKeyDown.bind(this);
@@ -125,10 +220,6 @@ export class FlightController {
     // ENABLE / DISABLE
     // ============================================================
 
-    /**
-     * Enable flight mode. Camera becomes child of ship.
-     * @param {THREE.Vector3} [shipPosition] - Where the ship is
-     */
     enable(shipPosition) {
         this.enabled = true;
         this.isLanding = false;
@@ -137,18 +228,24 @@ export class FlightController {
         // Reset inputs
         this.keys = {};
         this.velocity.set(0, 0, 0);
+        this.angularVelocity.set(0, 0, 0);
         this.pitchInput = 0;
         this.yawInput = 0;
+        this.rollInput = 0;
         this.freeLookYaw = 0;
         this.freeLookPitch = 0;
         this.isFreeLook = false;
         this.currentRoll = 0;
 
+        // Reset thruster states
+        for (const key of Object.keys(this.thrusterStates)) {
+            this.thrusterStates[key] = 0;
+        }
+
         if (shipPosition) {
             this.ship.group.position.copy(shipPosition);
         }
 
-        // Retract landing gear
         this.ship.setLandingGear(false);
 
         // Parent camera to ship
@@ -165,38 +262,27 @@ export class FlightController {
         this.domElement.addEventListener('click', this._onClick);
     }
 
-    /**
-     * Disable flight mode. Camera un-parented from ship.
-     * Returns the ship's world position for walking controller handoff.
-     * @returns {THREE.Vector3} Ship world position
-     */
     disable() {
         this.enabled = false;
 
-        // Get ship world position before un-parenting
         const worldPos = new THREE.Vector3();
         this.ship.group.getWorldPosition(worldPos);
 
-        // Un-parent camera
         this.camera.getWorldPosition(this._worldPos);
         this.camera.getWorldQuaternion(this._tempQuat);
         this.ship.group.remove(this.camera);
 
-        // Restore camera to scene-level
         this.camera.position.copy(this._worldPos);
         this.camera.quaternion.copy(this._tempQuat);
 
-        // Deploy landing gear
         this.ship.setLandingGear(true);
 
-        // Remove listeners
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('keyup', this._onKeyUp);
         document.removeEventListener('mousemove', this._onMouseMove);
         document.removeEventListener('pointerlockchange', this._onPointerLockChange);
         this.domElement.removeEventListener('click', this._onClick);
 
-        // Exit pointer lock
         if (document.pointerLockElement) {
             document.exitPointerLock();
         }
@@ -212,7 +298,6 @@ export class FlightController {
     _onKeyDown(e) {
         this.keys[e.code] = true;
 
-        // Prevent Alt from opening browser menu
         if (e.code === 'AltLeft' || e.code === 'AltRight') {
             e.preventDefault();
             this.isFreeLook = true;
@@ -242,7 +327,6 @@ export class FlightController {
         const dy = e.movementY || 0;
 
         if (this.isFreeLook) {
-            // Free look — orbit camera without turning ship
             this.freeLookYaw += dx * this.config.freeLookSpeed;
             this.freeLookPitch += dy * this.config.freeLookSpeed;
 
@@ -250,7 +334,6 @@ export class FlightController {
             this.freeLookYaw = Math.max(-maxAngle, Math.min(maxAngle, this.freeLookYaw));
             this.freeLookPitch = Math.max(-maxAngle * 0.5, Math.min(maxAngle * 0.5, this.freeLookPitch));
         } else {
-            // Normal steering
             this.yawInput -= dx * this.config.mouseSensitivity;
             this.pitchInput -= dy * this.config.mouseSensitivity;
         }
@@ -266,6 +349,14 @@ export class FlightController {
         }
     }
 
+    /**
+     * Set touch input from TouchControls.
+     * @param {Object} input - { x, z, yaw, pitch, boost, vertical }
+     */
+    setTouchInput(input) {
+        this.touchInput = { ...this.touchInput, ...input };
+    }
+
     // ============================================================
     // UPDATE — called every frame
     // ============================================================
@@ -273,7 +364,6 @@ export class FlightController {
     update(dt) {
         if (!this.enabled) return;
 
-        // Clamp dt to prevent physics explosion
         dt = Math.min(dt, 0.1);
 
         if (this.isLanding) {
@@ -281,10 +371,13 @@ export class FlightController {
             return;
         }
 
-        // ---- Steering (apply mouse input to ship rotation) ----
+        // ---- Thruster spool (Pioneer response delay) ----
+        this._updateThrusterSpool(dt);
+
+        // ---- Rotational thrusters (steering) ----
         this._updateSteering(dt);
 
-        // ---- Thrust (WASD → acceleration) ----
+        // ---- Linear thrusters (movement) ----
         this._updateThrust(dt);
 
         // ---- Ground collision ----
@@ -308,101 +401,186 @@ export class FlightController {
         this.ship.updateEngines(this.thrust, performance.now() / 1000);
     }
 
+    /**
+     * Pioneer-style thruster spool.
+     * Thrusters don't instantly reach full power — they spool up/down
+     * based on input, giving a more physical, weighty feel.
+     */
+    _updateThrusterSpool(dt) {
+        const rate = this.config.thrusterSpoolRate * dt;
+        const ti = this.touchInput;
+
+        // Target states from input
+        const targets = {
+            main: (this.keys['KeyW'] || ti.z > 0.1) ? 1.0 : 0.0,
+            retro: (this.keys['KeyS'] || ti.z < -0.1) ? 1.0 : 0.0,
+            lateralLeft: (this.keys['KeyA'] || ti.x < -0.1) ? 1.0 : 0.0,
+            lateralRight: (this.keys['KeyD'] || ti.x > 0.1) ? 1.0 : 0.0,
+            verticalUp: (this.keys['KeyR'] || ti.vertical > 0.1) ? 1.0 : 0.0,
+            verticalDown: (this.keys['KeyF'] || ti.vertical < -0.1) ? 1.0 : 0.0,
+            pitch: Math.abs(this.pitchInput) > 0.01 ? 1.0 : 0.0,
+            yaw: Math.abs(this.yawInput) > 0.01 ? 1.0 : 0.0,
+            roll: (this.keys['KeyQ'] || this.keys['KeyE']) ? 1.0 : 0.0,
+        };
+
+        // Spool toward targets
+        for (const [key, target] of Object.entries(targets)) {
+            const current = this.thrusterStates[key];
+            if (current < target) {
+                this.thrusterStates[key] = Math.min(target, current + rate);
+            } else {
+                this.thrusterStates[key] = Math.max(target, current - rate * 2); // Spool down faster
+            }
+        }
+    }
+
     _updateSteering(dt) {
         // Clamp input
         this.pitchInput = Math.max(-1, Math.min(1, this.pitchInput));
         this.yawInput = Math.max(-1, Math.min(1, this.yawInput));
 
-        // Apply pitch and yaw to ship's Euler rotation
+        // Merge touch input
+        const touchYaw = this.touchInput.yaw || 0;
+        const touchPitch = this.touchInput.pitch || 0;
+
         const euler = this._euler;
         euler.setFromQuaternion(this.ship.group.quaternion, 'YXZ');
 
-        euler.y += this.yawInput * this.config.yawSpeed * dt;
-        euler.x += this.pitchInput * this.config.pitchSpeed * dt;
+        // Pioneer: rotational thrusters apply angular acceleration
+        // Angular velocity accumulates (like real space physics)
+        const pitchAccel = (this.pitchInput + touchPitch) * this.config.pitchSpeed;
+        const yawAccel = (this.yawInput + touchYaw) * this.config.yawSpeed;
 
-        // Clamp pitch to prevent flipping
+        // Apply rotation scaled by thruster spool state
+        const pitchSpool = this.thrusterStates.pitch;
+        const yawSpool = this.thrusterStates.yaw;
+
+        euler.y += yawAccel * yawSpool * dt;
+        euler.x += pitchAccel * pitchSpool * dt;
+
+        // Clamp pitch
         euler.x = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, euler.x));
 
-        // Roll from strafe input (bank into turns)
-        const strafeInput = (this.keys['KeyA'] ? 1 : 0) - (this.keys['KeyD'] ? 1 : 0);
-        this.targetRoll = strafeInput * this.config.rollOnStrafe;
-        // Also add yaw-based roll for natural banking
-        this.targetRoll += this.yawInput * 0.3;
-        this.targetRoll = Math.max(-0.6, Math.min(0.6, this.targetRoll));
+        // Q/E roll (Pioneer has explicit roll control)
+        this.rollInput = 0;
+        if (this.keys['KeyQ']) this.rollInput = 1;
+        if (this.keys['KeyE']) this.rollInput = -1;
 
-        // Smooth roll
+        // Bank from strafe + yaw (cosmetic)
+        const strafeInput = (this.keys['KeyA'] ? 1 : 0) - (this.keys['KeyD'] ? 1 : 0)
+                          + (this.touchInput.x < -0.1 ? 1 : 0) - (this.touchInput.x > 0.1 ? 1 : 0);
+        this.targetRoll = strafeInput * this.config.rollOnStrafe;
+        this.targetRoll += this.yawInput * 0.3;
+        this.targetRoll += this.rollInput * 0.8; // Manual roll
+        this.targetRoll = Math.max(-0.8, Math.min(0.8, this.targetRoll));
+
         this.currentRoll += (this.targetRoll - this.currentRoll) * Math.min(1, this.config.rollReturnSpeed * dt);
         euler.z = this.currentRoll;
 
         this.ship.group.quaternion.setFromEuler(euler);
 
-        // Decay input (smooth return to center)
-        this.pitchInput *= Math.max(0, 1 - 5 * dt);
-        this.yawInput *= Math.max(0, 1 - 5 * dt);
+        // Pioneer: angular drag (stabilization thrusters dampen spin)
+        this.pitchInput *= Math.max(0, 1 - this.config.angularDrag * dt);
+        this.yawInput *= Math.max(0, 1 - this.config.angularDrag * dt);
     }
 
     _updateThrust(dt) {
         // Get ship's local axes in world space
         this.ship.group.getWorldDirection(this._forward);
         this._right.crossVectors(this._forward, this._up).normalize();
+        this._shipUp.crossVectors(this._right, this._forward).normalize();
 
-        const accel = new THREE.Vector3();
+        this._thrustAccel.set(0, 0, 0);
         let thrustAmount = 0;
+        let fuelBurn = 0;
+        const ti = this.touchInput;
 
-        // Forward / Brake
-        if (this.keys['KeyW']) {
-            const thrustForce = this.config.forwardThrust * (this.isBoosting ? this.config.boostMultiplier : 1);
-            accel.addScaledVector(this._forward, thrustForce);
-            thrustAmount = this.isBoosting ? 1.0 : 0.6;
+        const hasFuel = this.fuel > 0;
+        const boosting = this.isBoosting || ti.boost;
+
+        // === MAIN ENGINE ===
+        if ((this.keys['KeyW'] || ti.z > 0.1) && hasFuel) {
+            const baseForce = THRUSTER_CONFIG.main.force;
+            const multiplier = boosting ? THRUSTER_CONFIG.afterburner.thrustMultiplier : 1;
+            const spool = this.thrusterStates.main;
+            const force = baseForce * multiplier * spool;
+            this._thrustAccel.addScaledVector(this._forward, force);
+            thrustAmount = boosting ? 1.0 : 0.6;
+            fuelBurn += THRUSTER_CONFIG.main.fuelRate * spool *
+                (boosting ? THRUSTER_CONFIG.afterburner.fuelMultiplier : 1);
         }
-        if (this.keys['KeyS']) {
-            accel.addScaledVector(this._forward, -this.config.brakeForce);
+
+        // === RETRO ROCKETS ===
+        if ((this.keys['KeyS'] || ti.z < -0.1) && hasFuel) {
+            const spool = this.thrusterStates.retro;
+            this._thrustAccel.addScaledVector(this._forward, -THRUSTER_CONFIG.retro.force * spool);
             thrustAmount = Math.max(thrustAmount, 0.2);
+            fuelBurn += THRUSTER_CONFIG.retro.fuelRate * spool;
         }
 
-        // Strafe
-        if (this.keys['KeyA']) {
-            accel.addScaledVector(this._right, -this.config.strafeThrust);
+        // === LATERAL THRUSTERS ===
+        if ((this.keys['KeyA'] || ti.x < -0.1) && hasFuel) {
+            const spool = this.thrusterStates.lateralLeft;
+            this._thrustAccel.addScaledVector(this._right, -THRUSTER_CONFIG.lateral.force * spool);
             thrustAmount = Math.max(thrustAmount, 0.3);
+            fuelBurn += THRUSTER_CONFIG.lateral.fuelRate * spool;
         }
-        if (this.keys['KeyD']) {
-            accel.addScaledVector(this._right, this.config.strafeThrust);
+        if ((this.keys['KeyD'] || ti.x > 0.1) && hasFuel) {
+            const spool = this.thrusterStates.lateralRight;
+            this._thrustAccel.addScaledVector(this._right, THRUSTER_CONFIG.lateral.force * spool);
             thrustAmount = Math.max(thrustAmount, 0.3);
+            fuelBurn += THRUSTER_CONFIG.lateral.fuelRate * spool;
+        }
+
+        // === VERTICAL THRUSTERS (R/F or touch) ===
+        if ((this.keys['KeyR'] || ti.vertical > 0.1) && hasFuel) {
+            const spool = this.thrusterStates.verticalUp;
+            this._thrustAccel.addScaledVector(this._shipUp, THRUSTER_CONFIG.vertical.force * spool);
+            thrustAmount = Math.max(thrustAmount, 0.3);
+            fuelBurn += THRUSTER_CONFIG.vertical.fuelRate * spool;
+        }
+        if ((this.keys['KeyF'] || ti.vertical < -0.1) && hasFuel) {
+            const spool = this.thrusterStates.verticalDown;
+            this._thrustAccel.addScaledVector(this._shipUp, -THRUSTER_CONFIG.vertical.force * spool);
+            thrustAmount = Math.max(thrustAmount, 0.3);
+            fuelBurn += THRUSTER_CONFIG.vertical.fuelRate * spool;
         }
 
         // Apply acceleration
-        this.velocity.addScaledVector(accel, dt);
+        this.velocity.addScaledVector(this._thrustAccel, dt);
 
-        // Drag (exponential decay)
+        // Consume fuel
+        this.fuel = Math.max(0, this.fuel - fuelBurn * dt);
+
+        // Pioneer-style drag — very light in space, heavier in atmosphere
+        // This simulates atmospheric drag for low-altitude flight
         const dragFactor = Math.pow(1 - this.config.linearDrag, dt);
         this.velocity.multiplyScalar(dragFactor);
 
         // Speed limit
-        const maxSpd = this.isBoosting ? this.config.maxBoostSpeed : this.config.maxSpeed;
+        const maxSpd = boosting ? this.config.maxBoostSpeed : this.config.maxSpeed;
         if (this.velocity.length() > maxSpd) {
             this.velocity.setLength(maxSpd);
         }
 
-        // Prevent going backwards (negative speed)
+        // Prevent excessive backwards speed
         const forwardSpeed = this.velocity.dot(this._forward);
         if (forwardSpeed < -10) {
-            // Clamp reverse speed
             this.velocity.addScaledVector(this._forward, (-10 - forwardSpeed));
         }
 
         this.thrust = thrustAmount;
 
-        // Small upward bias to counteract gravity feel (hover)
-        // Ships should float, not fall
-        if (!this.keys['KeyS']) {
+        // Hover bias (ships float, not fall)
+        if (!this.keys['KeyS'] && !(ti.z < -0.1)) {
             const currentY = this.ship.group.position.y;
             const groundH = this.getHeightAt(
                 this.ship.group.position.x,
                 this.ship.group.position.z
             ) || 0;
-            const hoverTarget = groundH + 20; // Default hover altitude
+            const hoverTarget = groundH + 20;
             if (currentY < hoverTarget && this.velocity.y < 5) {
-                this.velocity.y += 8 * dt; // Gentle upward push
+                this.velocity.y += 8 * dt;
             }
         }
     }
@@ -416,16 +594,14 @@ export class FlightController {
 
         if (pos.y < minY) {
             pos.y = minY;
-            // Bounce velocity upward
             if (this.velocity.y < 0) {
-                this.velocity.y = Math.abs(this.velocity.y) * 0.3; // Soft bounce
+                this.velocity.y = Math.abs(this.velocity.y) * 0.3;
             }
         }
     }
 
     _updateFreeLook(dt) {
         if (this.isFreeLook) {
-            // Apply free look rotation to camera (local to ship)
             this.camera.rotation.set(
                 -this.freeLookPitch,
                 -this.freeLookYaw,
@@ -433,7 +609,6 @@ export class FlightController {
                 'YXZ'
             );
         } else {
-            // Slerp camera back to forward
             if (Math.abs(this.freeLookYaw) > 0.001 || Math.abs(this.freeLookPitch) > 0.001) {
                 this.freeLookYaw *= Math.max(0, 1 - this.config.freeLookReturnSpeed * dt);
                 this.freeLookPitch *= Math.max(0, 1 - this.config.freeLookReturnSpeed * dt);
@@ -449,7 +624,6 @@ export class FlightController {
             }
         }
 
-        // Ensure cockpit position
         this.camera.position.copy(this.config.cockpitOffset);
     }
 
@@ -457,19 +631,12 @@ export class FlightController {
     // LANDING SEQUENCE
     // ============================================================
 
-    /**
-     * Start auto-landing. Ship descends to ground.
-     * @param {Function} onComplete - Called when landed
-     */
     startLanding(onComplete) {
         this.isLanding = true;
         this.hasLanded = false;
         this.onLanded = onComplete;
 
-        // Kill horizontal velocity gradually
         this.velocity.multiplyScalar(0.3);
-
-        // Deploy landing gear
         this.ship.setLandingGear(true);
     }
 
@@ -478,10 +645,8 @@ export class FlightController {
         const groundH = this.getHeightAt(pos.x, pos.z) || 0;
         const targetY = groundH + this.config.landingHeight;
 
-        // Descend
         if (pos.y > targetY + 0.1) {
             pos.y -= this.config.landingDescentSpeed * dt;
-            // Slow horizontal movement
             this.velocity.multiplyScalar(Math.max(0, 1 - 3 * dt));
             pos.addScaledVector(this.velocity, dt);
         } else {
@@ -489,7 +654,6 @@ export class FlightController {
             this.velocity.set(0, 0, 0);
             this.hasLanded = true;
 
-            // Level out the ship
             const euler = this._euler;
             euler.setFromQuaternion(this.ship.group.quaternion, 'YXZ');
             euler.x *= 0.9;
@@ -502,7 +666,6 @@ export class FlightController {
             }
         }
 
-        // Update engine glow (idle)
         this.ship.updateEngines(0.1, performance.now() / 1000);
         this.speed = this.velocity.length();
         this.altitude = pos.y - groundH;
@@ -512,17 +675,11 @@ export class FlightController {
     // UTILITY
     // ============================================================
 
-    /**
-     * Get the ship's world position (for terrain/sky updates).
-     */
     getWorldPosition(target) {
         target = target || new THREE.Vector3();
         return this.ship.group.getWorldPosition(target);
     }
 
-    /**
-     * Get HUD info.
-     */
     getHUDInfo() {
         const pos = this.ship.group.position;
         return {
@@ -533,12 +690,13 @@ export class FlightController {
             isBoosting: this.isBoosting,
             thrust: this.thrust,
             isLanding: this.isLanding,
+            fuel: Math.round(this.fuel),
+            maxFuel: this.config.maxFuel,
+            // Thruster spool states for HUD visualization
+            thrusters: { ...this.thrusterStates },
         };
     }
 
-    /**
-     * Check if the ship is near a position (for E-key enter check).
-     */
     isNearPosition(worldPos, radius = 8) {
         return this.ship.group.position.distanceTo(worldPos) < radius;
     }

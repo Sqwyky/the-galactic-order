@@ -6,7 +6,7 @@
  *
  * Visual sequence:
  * 1. Charge: stars stretch, screen edges blur, engine glow intensifies
- * 2. Jump: flash white, redirect to new planet
+ * 2. Jump: flash white, seamlessly transition to new planet (no page reload)
  */
 
 import * as THREE from 'three';
@@ -30,6 +30,9 @@ export class HyperspaceSystem {
         this.chargeDuration = 2.0; // seconds to hold Space
         this.minAltitude = 50; // must be above this to jump
         this.isJumping = false;
+
+        // Seamless transition callback — called instead of page redirect
+        this.onJump = null;
 
         // Visual overlay
         this.overlay = this._createOverlay();
@@ -156,16 +159,33 @@ export class HyperspaceSystem {
         // Flash screen white
         this.flashOverlay.style.opacity = '1';
 
-        // After flash, redirect to new planet
+        // After flash peak, seamlessly transition to new planet (no page reload)
         setTimeout(() => {
-            // Generate random new planet
             const newRule = Math.floor(Math.random() * 256);
             const newSeed = Math.floor(Math.random() * 100000);
 
-            // Navigate to new planet
-            window.location.href =
-                `landing.html?rule=${newRule}&seed=${newSeed}`;
+            if (this.onJump) {
+                // Seamless in-page transition — dispose old world, build new one
+                this.onJump(newRule, newSeed);
+            } else {
+                // Fallback: legacy page redirect
+                window.location.href =
+                    `landing.html?rule=${newRule}&seed=${newSeed}`;
+            }
         }, 800);
+    }
+
+    /**
+     * Reset jump state after a seamless transition completes.
+     * Called by the game's transitionToPlanet() function.
+     */
+    resetJumpState() {
+        this.isJumping = false;
+        this.isCharging = false;
+        this.chargeProgress = 0;
+        this._spaceHeld = false;
+        this.overlay.style.opacity = '0';
+        this.starLines.visible = false;
     }
 
     // ============================================================

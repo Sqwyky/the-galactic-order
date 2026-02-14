@@ -52,39 +52,51 @@ const ROCK_CONFIG = {
 
 function createRockGeometry() {
     // Higher subdivision for more jagged, natural shapes
-    const geo = new THREE.IcosahedronGeometry(0.5, 2); // Higher subdivision for smoother rocks
+    const geo = new THREE.IcosahedronGeometry(0.5, 2); // Subdiv 2 for finer detail
     const positions = geo.getAttribute('position');
 
-    // Multi-octave perturbation for weathered, craggy rock look
+    // 5-octave perturbation for weathered, craggy rock look + erosion patterns
     for (let i = 0; i < positions.count; i++) {
         const x = positions.getX(i);
         const y = positions.getY(i);
         const z = positions.getZ(i);
 
         // Squash Y (rocks are wider than tall)
-        const squash = 0.55;
+        const squash = 0.5;
 
-        // Multi-frequency noise for natural craggy shape
-        // Low freq: large-scale deformation
-        const lo = Math.sin(x * 5.1 + z * 3.7) * 0.12 +
-                   Math.cos(y * 4.3 + x * 2.9) * 0.10;
-        // Mid freq: medium bumps
-        const mid = Math.sin(x * 13.7 + y * 7.3) * 0.08 +
-                    Math.cos(z * 11.1 + x * 5.9) * 0.06;
-        // High freq: small cracks and edges
-        const hi = Math.sin(x * 29.3 + z * 23.1 + y * 17.7) * 0.04 +
-                   Math.cos(y * 31.7 + x * 19.3) * 0.03;
+        // 5-octave noise cascade for natural rock fracture patterns
+        // Octave 1: large-scale deformation (boulder shape)
+        const o1 = Math.sin(x * 3.1 + z * 2.7) * 0.14 +
+                   Math.cos(y * 2.3 + x * 1.9) * 0.12;
+        // Octave 2: medium features (ridges, faces)
+        const o2 = Math.sin(x * 7.7 + y * 5.3) * 0.10 +
+                    Math.cos(z * 6.1 + x * 4.9) * 0.08;
+        // Octave 3: small bumps and ledges
+        const o3 = Math.sin(x * 15.3 + z * 13.1 + y * 9.7) * 0.06 +
+                    Math.cos(y * 14.7 + x * 11.3) * 0.05;
+        // Octave 4: fine cracks and surface roughness
+        const o4 = Math.sin(x * 29.3 + z * 23.1 + y * 17.7) * 0.03 +
+                    Math.cos(y * 31.7 + x * 27.3) * 0.025;
+        // Octave 5: micro-detail (grain texture)
+        const o5 = Math.sin(x * 53.7 + y * 47.3 + z * 41.1) * 0.015 +
+                    Math.cos(z * 59.3 + x * 43.7) * 0.012;
 
-        const noise = lo + mid + hi;
+        const noise = o1 + o2 + o3 + o4 + o5;
+
+        // Erosion pattern: vertical striations (rain erosion on exposed faces)
+        const erosionY = Math.sin(x * 8.3 + z * 6.7) * Math.max(0, y) * 0.06;
 
         // Sharpen edges — push vertices inward more than outward
         // This creates the angular, fractured look of real rocks
-        const sharpNoise = noise > 0 ? noise * 0.7 : noise * 1.3;
+        const sharpNoise = noise > 0 ? noise * 0.6 : noise * 1.4;
+
+        // Flat bottom for ground contact
+        const flatBottom = y < -0.15 ? 0.3 : 1.0;
 
         positions.setXYZ(i,
-            x * (1.0 + sharpNoise) + Math.sin(z * 7.7) * 0.02,
-            y * squash * (1.0 + sharpNoise * 0.6),
-            z * (1.0 + sharpNoise) + Math.cos(x * 9.3) * 0.02
+            x * (1.0 + sharpNoise) + Math.sin(z * 7.7) * 0.015,
+            y * squash * (1.0 + sharpNoise * 0.5 - erosionY) * flatBottom,
+            z * (1.0 + sharpNoise) + Math.cos(x * 9.3) * 0.015
         );
     }
 
@@ -116,39 +128,48 @@ export class RockScatter {
             const rockParams = deriveShapeParams(planetRule, rockSeed, 'rock');
             const rockColors = deriveShapeColors(planetRule, rockSeed);
             try {
+                // Use derived modifiers but force some rock-appropriate values
+                const rockModifiers = {
+                    ...(rockParams.modifiers || {}),
+                    noiseAmount: Math.max(rockParams.modifiers?.noiseAmount || 0, 0.04),
+                    noiseScale: 4.0, // Consistent rock-scale noise
+                    twistAmount: 0,  // Rocks don't twist
+                    spineAmount: 0,  // Rocks don't have spines
+                };
                 this.rockGeo = createSupershapeGeometry(
-                    rockParams.params1, rockParams.params2, 12 // Low res for rocks
+                    rockParams.params1, rockParams.params2, 14, rockModifiers
                 );
                 normalizeGeometry(this.rockGeo);
                 // Squash Y for rock-like shape
                 const pos = this.rockGeo.getAttribute('position');
                 for (let i = 0; i < pos.count; i++) {
-                    pos.setY(i, pos.getY(i) * 0.6);
+                    pos.setY(i, pos.getY(i) * 0.55);
                 }
                 this.rockGeo.computeVertexNormals();
             } catch (e) {
                 this.rockGeo = createRockGeometry(); // Fallback
             }
 
-            // Rock color from CA — PBR material for depth and specular
+            // Rock material — PBR Standard for realistic stone look
             this.material = new THREE.MeshStandardMaterial({
                 color: new THREE.Color(
                     rockColors.secondary[0],
                     rockColors.secondary[1],
                     rockColors.secondary[2]
                 ),
+                roughness: 0.85,
+                metalness: rockColors.metalness > 0.3 ? 0.15 : 0.02,
                 flatShading: true,
-                roughness: 0.8,
-                metalness: 0.05,
+                vertexColors: true,
             });
         } else {
             // Fallback: classic rock
             this.rockGeo = createRockGeometry();
             this.material = new THREE.MeshStandardMaterial({
                 color: options.rockColor || new THREE.Color(0x8a7d6b),
+                roughness: 0.88,
+                metalness: 0.02,
                 flatShading: true,
-                roughness: 0.8,
-                metalness: 0.05,
             });
         }
 
