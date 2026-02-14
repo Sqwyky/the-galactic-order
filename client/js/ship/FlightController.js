@@ -108,7 +108,7 @@ export const FLIGHT_CONFIG = {
     rollReturnSpeed: 3.0,
 
     // Camera
-    cockpitOffset: new THREE.Vector3(0, 0.6, 1.8),
+    cockpitOffset: new THREE.Vector3(0, 0.85, -1.4),
     freeLookSpeed: 0.003,
     freeLookMaxAngle: Math.PI * 0.6,
     freeLookReturnSpeed: 5.0,
