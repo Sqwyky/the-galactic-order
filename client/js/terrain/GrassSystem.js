@@ -50,27 +50,33 @@ const GRASS_CONFIG = {
 // ============================================================
 
 function createBladeGeometry() {
-    // Simple grass blade: 2 triangles forming a tapered quad
-    // 4 vertices: bottom-left, bottom-right, mid, top
+    // Cross-billboard: 2 quads at 90° to each other
+    // Prevents grass from disappearing when viewed edge-on
     const positions = new Float32Array([
-        // Triangle 1: bottom quad
-        -0.5, 0.0, 0.0,   // bottom-left
-         0.5, 0.0, 0.0,   // bottom-right
-         0.3, 0.5, 0.0,   // mid-right
-
-        // Triangle 2: bottom quad other half
-        -0.5, 0.0, 0.0,   // bottom-left
-         0.3, 0.5, 0.0,   // mid-right
-        -0.3, 0.5, 0.0,   // mid-left
-
+        // ---- Quad 1: Z-facing ----
+        // Triangle 1: bottom
+        -0.5, 0.0, 0.0,   0.5, 0.0, 0.0,   0.3, 0.5, 0.0,
+        // Triangle 2: bottom other half
+        -0.5, 0.0, 0.0,   0.3, 0.5, 0.0,  -0.3, 0.5, 0.0,
         // Triangle 3: top taper
-        -0.3, 0.5, 0.0,   // mid-left
-         0.3, 0.5, 0.0,   // mid-right
-         0.0, 1.0, 0.0,   // top (tip)
+        -0.3, 0.5, 0.0,   0.3, 0.5, 0.0,   0.0, 1.0, 0.0,
+
+        // ---- Quad 2: X-facing (rotated 90°) ----
+        // Triangle 4: bottom
+        0.0, 0.0, -0.5,   0.0, 0.0, 0.5,   0.0, 0.5, 0.3,
+        // Triangle 5: bottom other half
+        0.0, 0.0, -0.5,   0.0, 0.5, 0.3,   0.0, 0.5, -0.3,
+        // Triangle 6: top taper
+        0.0, 0.5, -0.3,   0.0, 0.5, 0.3,   0.0, 1.0, 0.0,
     ]);
 
     // UVs for color gradient (y=0 at base, y=1 at tip)
     const uvs = new Float32Array([
+        // Quad 1
+        0.0, 0.0,  1.0, 0.0,  0.8, 0.5,
+        0.0, 0.0,  0.8, 0.5,  0.2, 0.5,
+        0.2, 0.5,  0.8, 0.5,  0.5, 1.0,
+        // Quad 2
         0.0, 0.0,  1.0, 0.0,  0.8, 0.5,
         0.0, 0.0,  0.8, 0.5,  0.2, 0.5,
         0.2, 0.5,  0.8, 0.5,  0.5, 1.0,

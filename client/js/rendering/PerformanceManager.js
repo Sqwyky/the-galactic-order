@@ -46,20 +46,23 @@ const TIER_SETTINGS = {
     // ---- ULTRA: everything maxed, for beefy GPUs ----
     [QUALITY_TIERS.ULTRA]: {
         particleMultiplier:   1.0,
-        drawDistance:          6,     // matches TERRAIN_CONFIG.viewRadius default
+        drawDistance:          6,
         floraMultiplier:      1.0,
         grassEnabled:         true,
         miningParticleCount:  40,
         postProcessing: {
             ssao:       true,
             bloom:      true,
-            filmGrain:  true,
+            filmGrain:  false,
             colorGrade: true,
+            smaa:       true,
         },
         bloomStrengthMultiplier: 1.0,
         ssaoKernelRadius:        12,
-        filmGrainIntensity:      0.025,
-        saturationBoost:         1.3,
+        filmGrainIntensity:      0.012,
+        saturationBoost:         1.15,
+        shadows:                 true,
+        shadowMapSize:           2048,
     },
 
     // ---- HIGH: slight SSAO reduction, fewer particles ----
@@ -72,16 +75,19 @@ const TIER_SETTINGS = {
         postProcessing: {
             ssao:       true,
             bloom:      true,
-            filmGrain:  true,
+            filmGrain:  false,
             colorGrade: true,
+            smaa:       true,
         },
         bloomStrengthMultiplier: 1.0,
         ssaoKernelRadius:        8,
-        filmGrainIntensity:      0.025,
-        saturationBoost:         1.3,
+        filmGrainIntensity:      0.012,
+        saturationBoost:         1.15,
+        shadows:                 true,
+        shadowMapSize:           1024,
     },
 
-    // ---- MEDIUM: no SSAO, bloom + grain preserved, halved particles ----
+    // ---- MEDIUM: no SSAO, no shadows, SMAA preserved ----
     [QUALITY_TIERS.MEDIUM]: {
         particleMultiplier:   0.5,
         drawDistance:          4,
@@ -90,53 +96,62 @@ const TIER_SETTINGS = {
         miningParticleCount:  25,
         postProcessing: {
             ssao:       false,
-            bloom:      true,       // Keep bloom — the painted sci-fi look
-            filmGrain:  true,       // Keep grain — cheap, adds texture
+            bloom:      true,
+            filmGrain:  false,
             colorGrade: true,
+            smaa:       true,
         },
         bloomStrengthMultiplier: 0.7,
         ssaoKernelRadius:        8,
-        filmGrainIntensity:      0.02,
-        saturationBoost:         1.35,  // Slightly higher to compensate for no SSAO depth
+        filmGrainIntensity:      0.008,
+        saturationBoost:         1.2,
+        shadows:                 false,
+        shadowMapSize:           512,
     },
 
-    // ---- LOW: no SSAO, reduced bloom + grain, sparse grass ----
+    // ---- LOW: no SSAO, no shadows, no SMAA ----
     [QUALITY_TIERS.LOW]: {
         particleMultiplier:   0.35,
         drawDistance:          3,
         floraMultiplier:      0.4,
-        grassEnabled:         true,    // Keep grass (sparse), preserves ground look
-        grassMultiplier:      0.3,     // Very sparse grass
+        grassEnabled:         true,
+        grassMultiplier:      0.3,
         miningParticleCount:  15,
         postProcessing: {
             ssao:       false,
-            bloom:      true,       // Keep bloom — even subtle bloom prevents flat look
-            filmGrain:  true,       // Keep grain — nearly free on GPU
+            bloom:      true,
+            filmGrain:  false,
             colorGrade: true,
+            smaa:       false,
         },
         bloomStrengthMultiplier: 0.5,
         ssaoKernelRadius:        4,
-        filmGrainIntensity:      0.015,
-        saturationBoost:         1.4,   // Higher saturation compensates for fewer visual layers
+        filmGrainIntensity:      0.006,
+        saturationBoost:         1.25,
+        shadows:                 false,
+        shadowMapSize:           512,
     },
 
-    // ---- POTATO: everything stays ON but at minimum — looks good, runs fast ----
+    // ---- POTATO: everything at minimum ----
     [QUALITY_TIERS.POTATO]: {
         particleMultiplier:   0.25,
         drawDistance:          2,
         floraMultiplier:      0.25,
-        grassEnabled:         false,   // Only grass is disabled on true potato
+        grassEnabled:         false,
         miningParticleCount:  10,
         postProcessing: {
             ssao:       false,
-            bloom:      true,       // Bloom stays — threshold raised so only bright things glow
-            filmGrain:  true,       // Grain stays — it's a single texture sample, nearly free
-            colorGrade: true,       // Color grade stays — always
+            bloom:      true,
+            filmGrain:  false,
+            colorGrade: true,
+            smaa:       false,
         },
         bloomStrengthMultiplier: 0.35,
         ssaoKernelRadius:        4,
-        filmGrainIntensity:      0.012, // Subtle but present
-        saturationBoost:         1.45,  // Extra pop to compensate for less geometry detail
+        filmGrainIntensity:      0.005,
+        saturationBoost:         1.3,
+        shadows:                 false,
+        shadowMapSize:           256,
     },
 };
 
@@ -222,12 +237,13 @@ export class PerformanceManager {
             postProcessing: {
                 ssao:       true,
                 bloom:      true,
-                filmGrain:  true,
+                filmGrain:  false,
                 colorGrade: true,
+                smaa:       true,
             },
-            bloomStrength:        1.0,  // final bloom strength (base * multiplier)
-            filmGrainIntensity:   0.025,
-            saturationBoost:      1.3,
+            bloomStrength:        1.0,
+            filmGrainIntensity:   0.012,
+            saturationBoost:      1.15,
         };
 
         // Detect hardware and set the initial tier
@@ -426,6 +442,7 @@ export class PerformanceManager {
         this.settings.postProcessing.bloom      = cfg.postProcessing.bloom;
         this.settings.postProcessing.filmGrain  = cfg.postProcessing.filmGrain;
         this.settings.postProcessing.colorGrade = cfg.postProcessing.colorGrade;
+        this.settings.postProcessing.smaa       = cfg.postProcessing.smaa || false;
 
         // Bloom strength = mood-driven base * tier multiplier
         this.settings.bloomStrength = this._bloomBaseStrength * cfg.bloomStrengthMultiplier;
@@ -460,12 +477,15 @@ export class PerformanceManager {
      * @param {ShaderPass}     filmGrainPass
      * @param {ShaderPass}     [colorGradePass] - optional; if omitted, color grade stays always-on
      */
-    applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass) {
+    applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass, smaaPass, renderer, sunLight) {
         this._composer       = composer;
         this._ssaoPass       = ssaoPass;
         this._bloomPass      = bloomPass;
         this._filmGrainPass  = filmGrainPass;
         this._colorGradePass = colorGradePass || null;
+        this._smaaPass       = smaaPass || null;
+        this._renderer       = renderer || null;
+        this._sunLight       = sunLight || null;
 
         // Apply current tier to the passes right away
         this._syncPasses();
@@ -497,11 +517,11 @@ export class PerformanceManager {
      */
     _syncPasses() {
         const pp = this.settings.postProcessing;
+        const cfg = TIER_SETTINGS[this.currentTier];
 
         if (this._ssaoPass) {
             this._ssaoPass.enabled = pp.ssao;
             if (pp.ssao) {
-                const cfg = TIER_SETTINGS[this.currentTier];
                 this._ssaoPass.kernelRadius = cfg.ssaoKernelRadius;
             }
         }
@@ -513,7 +533,6 @@ export class PerformanceManager {
 
         if (this._filmGrainPass) {
             this._filmGrainPass.enabled = pp.filmGrain;
-            // Adjust grain intensity per tier (subtle on low-end, full on high-end)
             if (this._filmGrainPass.uniforms && this._filmGrainPass.uniforms.uIntensity) {
                 this._filmGrainPass.uniforms.uIntensity.value = this.settings.filmGrainIntensity;
             }
@@ -521,9 +540,27 @@ export class PerformanceManager {
 
         if (this._colorGradePass) {
             this._colorGradePass.enabled = pp.colorGrade;
-            // Adjust saturation per tier (higher on low-end to compensate for fewer layers)
             if (this._colorGradePass.uniforms && this._colorGradePass.uniforms.uSaturation) {
                 this._colorGradePass.uniforms.uSaturation.value = this.settings.saturationBoost;
+            }
+        }
+
+        // SMAA anti-aliasing
+        if (this._smaaPass) {
+            this._smaaPass.enabled = pp.smaa || false;
+        }
+
+        // Shadow mapping — toggle on renderer and resize shadow map
+        if (this._renderer && cfg) {
+            this._renderer.shadowMap.enabled = cfg.shadows || false;
+        }
+        if (this._sunLight && cfg) {
+            if (cfg.shadows) {
+                this._sunLight.castShadow = true;
+                this._sunLight.shadow.mapSize.width = cfg.shadowMapSize;
+                this._sunLight.shadow.mapSize.height = cfg.shadowMapSize;
+            } else {
+                this._sunLight.castShadow = false;
             }
         }
     }

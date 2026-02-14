@@ -52,7 +52,7 @@ const ROCK_CONFIG = {
 
 function createRockGeometry() {
     // Higher subdivision for more jagged, natural shapes
-    const geo = new THREE.IcosahedronGeometry(0.5, 1);
+    const geo = new THREE.IcosahedronGeometry(0.5, 2); // Higher subdivision for smoother rocks
     const positions = geo.getAttribute('position');
 
     // Multi-octave perturbation for weathered, craggy rock look
@@ -130,21 +130,25 @@ export class RockScatter {
                 this.rockGeo = createRockGeometry(); // Fallback
             }
 
-            // Rock color from CA
-            this.material = new THREE.MeshLambertMaterial({
+            // Rock color from CA — PBR material for depth and specular
+            this.material = new THREE.MeshStandardMaterial({
                 color: new THREE.Color(
                     rockColors.secondary[0],
                     rockColors.secondary[1],
                     rockColors.secondary[2]
                 ),
                 flatShading: true,
+                roughness: 0.8,
+                metalness: 0.05,
             });
         } else {
             // Fallback: classic rock
             this.rockGeo = createRockGeometry();
-            this.material = new THREE.MeshLambertMaterial({
+            this.material = new THREE.MeshStandardMaterial({
                 color: options.rockColor || new THREE.Color(0x8a7d6b),
                 flatShading: true,
+                roughness: 0.8,
+                metalness: 0.05,
             });
         }
 
@@ -257,8 +261,8 @@ export class RockScatter {
             this.rockGeo, this.material, rocks.length
         );
         instancedMesh.frustumCulled = true;
-        instancedMesh.castShadow = false;
-        instancedMesh.receiveShadow = false;
+        instancedMesh.castShadow = true;
+        instancedMesh.receiveShadow = true;
 
         // Per-instance colors for variation
         const colors = [];

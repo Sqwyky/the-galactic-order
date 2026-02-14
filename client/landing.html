@@ -265,6 +265,7 @@ import { InventoryManager } from './js/ui/InventoryManager.js';
 import { MiningHUD } from './js/ui/MiningHUD.js';
 import { ELEMENTS } from './js/generation/HarmonicElements.js';
 import { PerformanceManager } from './js/rendering/PerformanceManager.js';
+import { createProceduralEnvMap } from './js/rendering/ProceduralEnvMap.js';
 
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -273,6 +274,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 
 // ============================================================
 // URL PARAMS — planet identity
@@ -297,12 +299,11 @@ function setLoading(pct, msg) {
 // LANDING PHASES
 // ============================================================
 const PHASE = {
-    DESCENT: 'descent',   // Flying down through atmosphere
-    LANDING: 'landing',   // Final approach to ground
+    INTRO: 'intro',       // Cinematic ship reveal on surface
     SURFACE: 'surface',   // Walking on the surface
     FLIGHT: 'flight',     // Flying ship
 };
-let currentPhase = PHASE.DESCENT;
+let currentPhase = PHASE.INTRO;
 
 // ============================================================
 // RENDERER
@@ -314,9 +315,9 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0; // Slightly darker, more cinematic
-// Shadows DISABLED for performance — saves ~10-15ms per frame
-// We rely on ambient occlusion from vertex colors + lighting instead
-renderer.shadowMap.enabled = false;
+// Shadows enabled on ULTRA/HIGH tiers — PCFSoft for smooth penumbras
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // ============================================================
 // POST-PROCESSING — the NMS "cinematic painted sci-fi" look
@@ -327,11 +328,11 @@ const composer = new EffectComposer(renderer);
 const colorGradeShader = {
     uniforms: {
         tDiffuse: { value: null },
-        uSaturation: { value: 1.3 },
-        uContrast: { value: 1.12 },
+        uSaturation: { value: 1.15 },
+        uContrast: { value: 1.15 },
         uBrightness: { value: 0.01 },
-        uVignetteStrength: { value: 0.4 },
-        uChromaticAberration: { value: 0.0025 },
+        uVignetteStrength: { value: 0.25 },
+        uChromaticAberration: { value: 0.001 },
     },
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -379,7 +380,7 @@ const filmGrainShader = {
     uniforms: {
         tDiffuse: { value: null },
         uTime: { value: 0.0 },
-        uIntensity: { value: 0.025 },
+        uIntensity: { value: 0.012 },
     },
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -417,6 +418,7 @@ const filmGrainShader = {
     `
 };
 const filmGrainPass = new ShaderPass(filmGrainShader);
+filmGrainPass.enabled = false; // Disabled — cleaner look without grain
 
 const scene = new THREE.Scene();
 
@@ -462,6 +464,13 @@ const skyDome = new SkyDome({
 });
 skyDome.addToScene(scene); // Also sets scene.background = null
 
+// Procedural environment map — gives all PBR materials subtle sky reflections
+const envMap = createProceduralEnvMap(
+    renderer, skyTopColor, skyBottomColor, fogColor, sunColor,
+    new THREE.Vector3(0.5, 0.3, 0.4).normalize()
+);
+scene.environment = envMap;
+
 // ============================================================
 // LIGHTING
 // ============================================================
@@ -469,8 +478,20 @@ setLoading(20, 'Igniting local star...');
 
 const sunLight = new THREE.DirectionalLight(sunColor, 2.5);
 sunLight.position.set(100, 80, 60);
-// Shadows disabled for performance
+// Shadow mapping — grounding rocks, flora, and ship
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 0.5;
+sunLight.shadow.camera.far = 300;
+sunLight.shadow.camera.left = -80;
+sunLight.shadow.camera.right = 80;
+sunLight.shadow.camera.top = 80;
+sunLight.shadow.camera.bottom = -80;
+sunLight.shadow.bias = -0.0005;
+sunLight.shadow.normalBias = 0.02;
 scene.add(sunLight);
+scene.add(sunLight.target);
 
 // Ambient light intensity from mood (Delta worlds are dimmer, Beta worlds brighter)
 const ambientLight = new THREE.AmbientLight(skyBottomColor, planetMood.atmosphere.ambientLight);
@@ -503,9 +524,9 @@ composer.addPass(ssaoPass);
 // Bloom — strength driven by planet mood (dreamlike Delta = more bloom, calm Alpha = less)
 const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    planetMood.atmosphere.bloomStrength,  // mood-driven bloom
-    0.8,   // radius (wide soft glow)
-    0.82   // threshold (only bright things bloom)
+    Math.min(planetMood.atmosphere.bloomStrength, 1.0),  // mood-driven, capped at 1.0
+    0.5,   // radius (tighter, focused glow)
+    0.88   // threshold (only truly bright things bloom)
 );
 composer.addPass(bloomPass);
 
@@ -513,7 +534,14 @@ composer.addPass(bloomPass);
 const colorGradePass = new ShaderPass(colorGradeShader);
 composer.addPass(colorGradePass);
 
-// Film grain — 70s sci-fi texture, stronger in dark areas
+// SMAA — sub-pixel morphological anti-aliasing (kills jaggies from post-processing)
+const smaaPass = new SMAAPass(
+    window.innerWidth * renderer.getPixelRatio(),
+    window.innerHeight * renderer.getPixelRatio()
+);
+composer.addPass(smaaPass);
+
+// Film grain — subtle texture, stronger in dark areas
 composer.addPass(filmGrainPass);
 
 // Output pass (applies tone mapping to final output)
@@ -559,7 +587,7 @@ const alienFlora = new AlienFloraSystem(scene, {
 
 // Water plane — animated wave shader, follows camera
 const sunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
-terrainManager.createWater(fogColor, sunDir);
+terrainManager.createWater(fogColor, sunDir, skyTopColor, skyBottomColor);
 
 // Atmospheric dust/pollen particles — count + speed from planet mood
 const atmosphericParticles = new AtmosphericParticles(scene, {
@@ -643,7 +671,7 @@ tablet.setInventory(inventory);
 const perfManager = new PerformanceManager(renderer);
 
 // Wire perf manager to post-processing passes (so tier changes actually take effect)
-perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass);
+perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass, smaaPass, renderer, sunLight);
 
 // Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
 perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
@@ -797,7 +825,7 @@ function exitShip() {
 
 // Global E key listener (always active after landing)
 document.addEventListener('keydown', (e) => {
-    if (e.code === 'KeyE' && currentPhase !== PHASE.DESCENT) {
+    if (e.code === 'KeyE' && currentPhase !== PHASE.INTRO) {
         // Don't toggle during dialogue or tablet
         if (dialogue && dialogue.isDialogueActive()) return;
         if (tablet && tablet.isOpen) return;
@@ -915,94 +943,119 @@ function triggerBeingDialogue() {
 }
 
 // ============================================================
-// DESCENT ANIMATION
+// INTRO CINEMATIC — Ship reveal on the surface
 // ============================================================
-let descentProgress = 0;
-const descentDuration = 6.0; // seconds
-const descentStartHeight = 300;
-const descentEndHeight = 15; // just above ground
-let descentLanded = false;
+// The camera orbits around the landed ship, showing it off,
+// then settles behind the player for seamless FPS transition.
+let introProgress = 0;
+const introDuration = 7.0; // seconds for the full orbit
+let introShipPos = new THREE.Vector3(0, 0, 0); // set after terrain loads
+let introFinished = false;
 
-function updateDescent(dt) {
-    descentProgress += dt / descentDuration;
+// Pre-position ship on the ground at origin before intro starts
+function initIntro() {
+    // Use origin area for initial terrain generation
+    terrainManager.update(new THREE.Vector3(0, 0, 0));
 
-    if (descentProgress >= 1.0) {
-        descentProgress = 1.0;
-        if (!descentLanded) {
-            descentLanded = true;
+    // Wait a tick for terrain to generate, then place ship
+    const groundH = terrainManager.getHeightAt(0, 0) || 5;
+    introShipPos.set(0, groundH + 1.2, 0);
+    shipModel.group.position.copy(introShipPos);
+    shipModel.group.rotation.y = Math.PI * 0.25; // Angled for a nice profile view
+    shipModel.setLandingGear(true);
+    shipGrounded = true;
+
+    // Position camera at the starting orbit position (behind-left, looking at ship)
+    camera.position.set(introShipPos.x - 10, introShipPos.y + 5, introShipPos.z - 8);
+    camera.lookAt(introShipPos);
+
+    // HUD setup for intro
+    document.getElementById('phaseName').textContent = 'ARRIVING ON SURFACE';
+    document.getElementById('altitudeValue').textContent = `${Math.round(groundH)}m`;
+}
+
+function updateIntro(dt) {
+    introProgress += dt / introDuration;
+
+    if (introProgress >= 1.0) {
+        introProgress = 1.0;
+        if (!introFinished) {
+            introFinished = true;
             onLanded();
         }
         return;
     }
 
-    // Smooth descent curve (fast at start, slow at end)
-    const t = 1.0 - Math.pow(1.0 - descentProgress, 3);
-    const height = descentStartHeight * (1 - t) + descentEndHeight * t;
+    // Smooth easing (slow at start, smooth mid, slow at end)
+    const t = introProgress;
+    const ease = t < 0.5
+        ? 2 * t * t                          // ease-in first half
+        : 1 - Math.pow(-2 * t + 2, 2) / 2;  // ease-out second half
 
-    // Slight forward drift
-    const forwardDrift = t * 20;
+    // Orbit angle: sweep ~270° around the ship (start behind-left, end behind-right)
+    const startAngle = Math.PI * 1.25;   // Start behind-left
+    const endAngle   = Math.PI * -0.15;  // End slightly right of front
+    const angle = startAngle + (endAngle - startAngle) * ease;
 
-    // Camera shake during re-entry (strongest at start, fades as we slow down)
-    let shakeX = 0, shakeY = 0;
-    if (descentProgress < 0.6) {
-        const shakeIntensity = (1.0 - descentProgress / 0.6) * 1.5;
-        const shakeFreq = 15 + descentProgress * 20; // Gets faster, then calms
-        shakeX = Math.sin(descentProgress * shakeFreq * 6.28) * shakeIntensity *
-                 (0.5 + Math.sin(descentProgress * 47) * 0.5);
-        shakeY = Math.cos(descentProgress * shakeFreq * 5.13) * shakeIntensity * 0.6;
-    }
+    // Orbit radius: start far, come in closer, then pull back for FPS transition
+    const radiusBase = 10;
+    const radiusVariation = -3 * Math.sin(ease * Math.PI); // Closer in the middle
+    const radius = radiusBase + radiusVariation;
 
-    camera.position.set(
-        Math.sin(descentProgress * 0.5) * 5 + shakeX,
-        height + shakeY,
-        forwardDrift
-    );
+    // Height: start high, dip down to eye level at end
+    const heightStart = 5.0;
+    const heightEnd   = 2.0;
+    const height = heightStart + (heightEnd - heightStart) * ease;
 
-    // Look slightly ahead and down
-    const lookY = height * 0.3;
-    camera.lookAt(0, lookY, forwardDrift + 20);
+    // Camera position on orbit path
+    const camX = introShipPos.x + Math.cos(angle) * radius;
+    const camZ = introShipPos.z + Math.sin(angle) * radius;
+    const camY = introShipPos.y + height;
 
-    // Atmosphere overlay intensity
+    camera.position.set(camX, camY, camZ);
+
+    // Look at point: starts at ship center, transitions to slightly above ship
+    const lookY = introShipPos.y + 0.5 + (1.0 - ease) * 1.5;
+    camera.lookAt(introShipPos.x, lookY, introShipPos.z);
+
+    // Atmosphere overlay — subtle fade from dark (screen was loading) to clear
     const atmosOverlay = document.getElementById('atmos-overlay');
-    if (descentProgress < 0.3) {
-        // Re-entry glow (orange) — intense plasma heating effect
-        const baseIntensity = Math.sin(descentProgress / 0.3 * Math.PI) * 0.4;
-        // Flickering fire effect during re-entry
-        const flicker = 0.05 * Math.sin(descentProgress * 80) + 0.03 * Math.sin(descentProgress * 130);
-        const intensity = baseIntensity + flicker;
-        // Edge glow: orange center → red edges for realistic re-entry
-        atmosOverlay.style.background =
-            `radial-gradient(ellipse at center, ` +
-            `rgba(255,180,80,${intensity * 0.3}), ` +
-            `rgba(255,120,30,${intensity * 0.7}), ` +
-            `rgba(200,50,10,${intensity * 0.4}) 70%, ` +
-            `transparent)`;
-        atmosOverlay.style.opacity = 1;
-    } else if (descentProgress < 0.7) {
-        // Atmosphere haze (planet tint fading in)
-        const hazeIntensity = (descentProgress - 0.3) / 0.4 * 0.15;
-        atmosOverlay.style.background = atmosTint + hazeIntensity + ')';
+    if (introProgress < 0.15) {
+        // Quick fade from dark
+        const fadeIn = introProgress / 0.15;
+        atmosOverlay.style.background = `rgba(0,0,0,${(1 - fadeIn) * 0.5})`;
         atmosOverlay.style.opacity = 1;
     } else {
         atmosOverlay.style.opacity = 0;
     }
 
-    // Altitude display
+    // Update altitude display
+    const groundH = terrainManager.getHeightAt(camera.position.x, camera.position.z) || 0;
     document.getElementById('altitudeValue').textContent =
-        `${Math.round(height)}m`;
+        `${Math.round(camera.position.y - groundH)}m`;
 
-    // Update terrain around descent path
-    terrainManager.update(camera.position);
-    // Sky dome follows camera during descent too
-    skyDome.update(camera.position, descentProgress * descentDuration);
-    // Water waves animate during descent
-    terrainManager.updateWater(descentProgress * descentDuration, camera.position);
-    // Particles visible during descent
-    atmosphericParticles.update(camera.position, descentProgress * descentDuration);
+    // Update world systems during intro so everything is loaded & visible
+    terrainManager.update(introShipPos); // Center terrain on ship, not camera
+    skyDome.update(introShipPos, t * introDuration);
+    terrainManager.updateWater(t * introDuration, introShipPos);
+    atmosphericParticles.update(introShipPos, t * introDuration);
+
+    // Pre-populate visual elements near the ship during the orbit
+    grassSystem.update(terrainManager.chunks, introShipPos, t * introDuration);
+    rockScatter.update(terrainManager.chunks, introShipPos);
+    alienFlora.update(terrainManager.chunks, introShipPos, t * introDuration);
+
+    // Sun tracking
+    sunLight.position.set(introShipPos.x + 100, 80, introShipPos.z + 60);
+    sunLight.target.position.set(introShipPos.x, 0, introShipPos.z);
+
+    // Ground fill
+    groundFill.position.x = introShipPos.x;
+    groundFill.position.z = introShipPos.z;
 }
 
 // ============================================================
-// LANDING — transition to walking
+// LANDING — transition from intro cinematic to walking
 // ============================================================
 function onLanded() {
     currentPhase = PHASE.SURFACE;
@@ -1015,7 +1068,7 @@ function onLanded() {
         (planetMood.isSchumannResonant ? ' · ★ RESONANT' : '');
     banner.classList.add('visible');
 
-    // Fade out banner after 3 seconds
+    // Fade out banner after 4 seconds
     setTimeout(() => {
         banner.classList.remove('visible');
     }, 4000);
@@ -1031,16 +1084,22 @@ function onLanded() {
         document.getElementById('controls-hint').classList.remove('visible');
     }, 9000);
 
-    // Find a good landing spot (get ground height at current position)
-    const groundH = terrainManager.getHeightAt(camera.position.x, camera.position.z) || 5;
-    const startPos = new THREE.Vector3(
-        camera.position.x,
-        groundH + 1.7,
-        camera.position.z
-    );
+    // Player starts well clear of the ship, off to the side
+    const playerOffset = 12; // metres from ship
+    const playerX = introShipPos.x + playerOffset;
+    const playerZ = introShipPos.z + 4;
+    const groundH = terrainManager.getHeightAt(playerX, playerZ) || 5;
+    const startPos = new THREE.Vector3(playerX, groundH + 1.7, playerZ);
 
     // Enable walking
     walker.enable(startPos);
+
+    // Set initial look direction: face AWAY from the ship (toward open landscape)
+    // The walker uses yaw for forward direction: -sin(yaw), 0, -cos(yaw)
+    // We want to look away from the ship, so compute angle from ship to player
+    const dx = playerX - introShipPos.x;
+    const dz = playerZ - introShipPos.z;
+    walker.rotation.yaw = -Math.atan2(dx, dz); // Face away from ship
 
     // Enable mining tool
     miningSystem.enable();
@@ -1050,12 +1109,8 @@ function onLanded() {
     document.getElementById('phaseInfo').textContent =
         `${planetName} · Rule ${planetRule}`;
 
-    // Position the ship on the ground near the player
-    const shipX = camera.position.x + shipSpawnOffset.x;
-    const shipZ = camera.position.z + shipSpawnOffset.z;
-    const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || groundH;
-    shipModel.group.position.set(shipX, shipGroundH + 2.5, shipZ);
-    shipGrounded = true;
+    // Ship is already positioned by initIntro(), no need to reposition
+    // shipGrounded is already true from initIntro()
 
     // Spawn the Mysterious Being
     setTimeout(() => {
@@ -1082,11 +1137,14 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 let frameCount = 0, lastFpsTime = 0;
 
-setLoading(80, 'Preparing descent...');
+setLoading(80, 'Preparing surface...');
+
+// Initialize intro (places ship, camera, terrain)
+initIntro();
 
 // Fade out loading after a short delay
 setTimeout(() => {
-    setLoading(100, 'Entering atmosphere...');
+    setLoading(100, 'Arriving on surface...');
     setTimeout(() => {
         loadingEl.classList.add('fade');
         setTimeout(() => { loadingEl.style.display = 'none'; }, 2000);
@@ -1099,8 +1157,8 @@ function animate() {
     const t = clock.getElapsedTime();
 
     // Phase-specific update
-    if (currentPhase === PHASE.DESCENT) {
-        updateDescent(dt);
+    if (currentPhase === PHASE.INTRO) {
+        updateIntro(dt);
     } else if (currentPhase === PHASE.SURFACE) {
         // Don't update walking during dialogue or tablet
         if (!dialogue.isDialogueActive() && !tablet.isOpen) {
@@ -1181,6 +1239,7 @@ function animate() {
             80,
             camera.position.z + 60
         );
+        sunLight.target.position.set(camera.position.x, 0, camera.position.z);
 
         // Check ship proximity (show "Press E" prompt)
         if (shipGrounded) {
@@ -1242,6 +1301,7 @@ function animate() {
             80,
             _shipWorldPos.z + 60
         );
+        sunLight.target.position.set(_shipWorldPos.x, 0, _shipWorldPos.z);
 
         // Ship HUD
         shipHUD.update(flightInfo, weaponSystem.getHUDInfo());

@@ -45,8 +45,8 @@ export class SkyDome {
     }
 
     _build() {
-        // Large sphere — rendered from inside
-        const geo = new THREE.SphereGeometry(2000, 32, 20);
+        // Large sphere — rendered from inside (64x32 for smoother gradients)
+        const geo = new THREE.SphereGeometry(2000, 64, 32);
 
         const mat = new THREE.ShaderMaterial({
             uniforms: {
@@ -100,11 +100,11 @@ export class SkyDome {
                     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
                 }
 
-                // FBM (Fractal Brownian Motion) — layered noise for cloud shapes
+                // FBM (Fractal Brownian Motion) — 6 octaves for finer cloud detail
                 float fbm(vec2 p) {
                     float value = 0.0;
                     float amplitude = 0.5;
-                    for (int i = 0; i < 5; i++) {
+                    for (int i = 0; i < 6; i++) {
                         value += amplitude * noise(p);
                         p *= 2.0;
                         amplitude *= 0.5;
@@ -131,6 +131,12 @@ export class SkyDome {
                         skyColor = mix(uFogColor, uBottomColor, t);
                     }
 
+                    // ---- Rayleigh Scattering Approximation ----
+                    // Blue overhead, warm tones near sun at horizon
+                    float scatterAngle = max(dot(dir, uSunDirection), 0.0);
+                    vec3 rayleigh = vec3(0.3, 0.5, 0.9) * (1.0 - scatterAngle * 0.3);
+                    skyColor = mix(skyColor, skyColor * rayleigh * 1.2, 0.25 * smoothstep(0.0, 0.6, h));
+
                     // ---- Procedural Clouds ----
                     // Project direction onto a flat plane for cloud UV
                     if (h > 0.02) {
@@ -139,10 +145,13 @@ export class SkyDome {
                         // Animate clouds drifting slowly
                         cloudUV += uTime * vec2(0.008, 0.003);
 
-                        // Multi-octave FBM cloud density
-                        float density = fbm(cloudUV * 3.0);
+                        // Domain warping for more natural, swirly cloud shapes
+                        vec2 warpedUV = cloudUV + fbm(cloudUV * 2.0) * 0.25;
+
+                        // Multi-octave FBM cloud density with domain warping
+                        float density = fbm(warpedUV * 3.0);
                         // Second layer for more detail
-                        density += fbm(cloudUV * 7.0 + vec2(100.0)) * 0.3;
+                        density += fbm(warpedUV * 7.0 + vec2(100.0)) * 0.3;
 
                         // Shape clouds: threshold to create fluffy patches
                         float cloudShape = smoothstep(0.45, 0.7, density);

@@ -221,21 +221,42 @@ export class TerrainChunkMesh {
         geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geo.computeVertexNormals();
 
-        // MeshLambertMaterial is MUCH cheaper than MeshStandard (~3x faster)
-        // Still looks great with vertex colors and directional lighting.
-        const mat = new THREE.MeshLambertMaterial({
+        // MeshStandardMaterial — PBR lighting with roughness/metalness
+        // ~15-25% more expensive than Lambert, but adds depth and specular response
+        const mat = new THREE.MeshStandardMaterial({
             vertexColors: true,
             flatShading: false,
+            roughness: 0.85,
+            metalness: 0.0,
         });
+
+        // Vary roughness based on biome (via onBeforeCompile injection)
+        mat.onBeforeCompile = (shader) => {
+            shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <roughnessmap_fragment>',
+                `
+                // Replace the standard roughness chunk — must declare roughnessFactor ourselves
+                float biomeRough = 0.82 + vColor.g * 0.1 - vColor.b * 0.08;
+                float roughnessFactor = clamp(biomeRough, 0.7, 0.98);
+                `
+            );
+        };
+
+        // Generate procedural normal map from heightmap derivatives
+        const normalMap = this._generateNormalMap(dataRes, config.heightScale);
+        if (normalMap) {
+            mat.normalMap = normalMap;
+            mat.normalScale = new THREE.Vector2(0.8, 0.8);
+        }
 
         this.geometry = geo;
         this.material = mat;
         this.mesh = new THREE.Mesh(geo, mat);
         this.mesh.position.set(this.worldX, 0, this.worldZ);
 
-        // Shadows disabled for performance
+        // Terrain receives shadows from rocks, flora, ship
         this.mesh.castShadow = false;
-        this.mesh.receiveShadow = false;
+        this.mesh.receiveShadow = true;
 
         this.state = 'ready';
         return this.mesh;
@@ -288,9 +309,57 @@ export class TerrainChunkMesh {
         return height;
     }
 
+    /**
+     * Generate a procedural normal map from heightmap using Sobel derivatives.
+     * Computed once per chunk — adds micro-surface detail to terrain.
+     */
+    _generateNormalMap(dataRes, heightScale) {
+        if (!this.elevation || this.elevation.length < 4) return null;
+
+        const width = dataRes;
+        const height = dataRes;
+        const data = new Uint8Array(width * height * 4);
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = y * width + x;
+
+                // Sample neighbors (clamp at edges)
+                const left  = x > 0 ? this.elevation[y * width + (x - 1)] : this.elevation[idx];
+                const right = x < width - 1 ? this.elevation[y * width + (x + 1)] : this.elevation[idx];
+                const up    = y > 0 ? this.elevation[(y - 1) * width + x] : this.elevation[idx];
+                const down  = y < height - 1 ? this.elevation[(y + 1) * width + x] : this.elevation[idx];
+
+                // Partial derivatives scaled by height
+                const dX = (right - left) * heightScale * 2.0;
+                const dZ = (down - up) * heightScale * 2.0;
+
+                // Normal = normalize(cross(tangent, bitangent))
+                const len = Math.sqrt(dX * dX + 1 + dZ * dZ);
+
+                // Encode to [0, 255] tangent-space normal map
+                data[idx * 4]     = Math.round((-dX / len * 0.5 + 0.5) * 255);
+                data[idx * 4 + 1] = Math.round((1.0 / len * 0.5 + 0.5) * 255);
+                data[idx * 4 + 2] = Math.round((-dZ / len * 0.5 + 0.5) * 255);
+                data[idx * 4 + 3] = 255;
+            }
+        }
+
+        const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+        tex.needsUpdate = true;
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.magFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearFilter;
+        return tex;
+    }
+
     dispose() {
         if (this.geometry) this.geometry.dispose();
-        if (this.material) this.material.dispose();
+        if (this.material) {
+            if (this.material.normalMap) this.material.normalMap.dispose();
+            this.material.dispose();
+        }
         this.mesh = null;
         this.state = 'disposed';
     }
@@ -531,7 +600,7 @@ export class TerrainManager {
      * @param {THREE.Color} [fogColor] - Fog color for blending
      * @param {THREE.Vector3} [sunDirection] - Sun direction for specular
      */
-    createWater(fogColor, sunDirection) {
+    createWater(fogColor, sunDirection, skyTopColor, skyBottomColor) {
         const size = this.config.chunkWorldSize * 20; // Large enough to cover view
         const segments = 64; // Enough for visible wave displacement
         const geo = new THREE.PlaneGeometry(size, size, segments, segments);
@@ -547,6 +616,8 @@ export class TerrainManager {
                 uSunDirection: { value: sunDirection || new THREE.Vector3(0.5, 0.3, 0.4).normalize() },
                 uSunColor: { value: new THREE.Color(0xffeedd) },
                 uCameraPos: { value: new THREE.Vector3() },
+                uSkyTopColor: { value: skyTopColor || new THREE.Color(0x0a1a4a) },
+                uSkyBottomColor: { value: skyBottomColor || new THREE.Color(0x88aacc) },
             },
             vertexShader: /* glsl */ `
                 uniform float uTime;
@@ -557,11 +628,11 @@ export class TerrainManager {
                 void main() {
                     vec3 pos = position;
 
-                    // Layered sine waves for organic water motion
-                    float wave1 = sin(pos.x * 0.08 + uTime * 0.8) * 0.15;
-                    float wave2 = sin(pos.z * 0.06 + uTime * 0.6 + 1.0) * 0.12;
-                    float wave3 = sin((pos.x + pos.z) * 0.12 + uTime * 1.2) * 0.08;
-                    float wave4 = sin(pos.x * 0.25 + pos.z * 0.18 + uTime * 1.5) * 0.04;
+                    // Layered sine waves for organic water motion (3x amplitude for visible waves)
+                    float wave1 = sin(pos.x * 0.08 + uTime * 0.8) * 0.4;
+                    float wave2 = sin(pos.z * 0.06 + uTime * 0.6 + 1.0) * 0.3;
+                    float wave3 = sin((pos.x + pos.z) * 0.12 + uTime * 1.2) * 0.2;
+                    float wave4 = sin(pos.x * 0.25 + pos.z * 0.18 + uTime * 1.5) * 0.1;
                     pos.y += wave1 + wave2 + wave3 + wave4;
 
                     // Compute normal from wave derivatives
@@ -592,6 +663,8 @@ export class TerrainManager {
                 uniform vec3 uSunColor;
                 uniform vec3 uCameraPos;
                 uniform float uTime;
+                uniform vec3 uSkyTopColor;
+                uniform vec3 uSkyBottomColor;
 
                 varying vec3 vWorldPosition;
                 varying vec3 vNormal;
@@ -673,6 +746,12 @@ export class TerrainManager {
                     float totalFoam = max(crestFoam, shoreFoam);
                     vec3 foamColor = vec3(0.9, 0.95, 1.0); // White-blue foam
                     waterCol = mix(waterCol, foamColor, totalFoam);
+
+                    // Sky reflection — reflect view off water normal, sample sky gradient
+                    vec3 reflectDir = reflect(-viewDir, normal);
+                    float reflY = clamp(reflectDir.y * 0.5 + 0.5, 0.0, 1.0);
+                    vec3 skyReflection = mix(uSkyBottomColor, uSkyTopColor, reflY);
+                    waterCol = mix(waterCol, skyReflection, fresnel * 0.55);
 
                     // Combine
                     vec3 color = waterCol + specular + broadReflection;

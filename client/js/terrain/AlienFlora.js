@@ -131,83 +131,49 @@ export class AlienFloraSystem {
                 ? new THREE.Color(colors.emissive[0], colors.emissive[1], colors.emissive[2])
                 : new THREE.Color(0, 0, 0);
 
-            const mat = new THREE.ShaderMaterial({
-                uniforms: {
-                    uColor: { value: baseColor },
-                    uEmissive: { value: emissiveColor },
-                    uEmissiveIntensity: { value: hasGlow ? 0.4 : 0.0 },
-                    uTime: { value: 0.0 },
-                    uWindStrength: { value: windStrength },
-                    uOpacity: { value: colors.opacity },
-                },
-                vertexShader: /* glsl */ `
-                    uniform float uTime;
-                    uniform float uWindStrength;
-
-                    varying vec3 vNormal;
-                    varying vec3 vWorldPosition;
-
-                    void main() {
-                        vec3 pos = position;
-
-                        // Wind sway — stronger at top of plant (higher Y)
-                        // instanceMatrix already includes world position, so
-                        // use local Y as height factor
-                        float heightFactor = max(0.0, pos.y + 0.5); // 0 at base, 1 at top
-                        heightFactor = heightFactor * heightFactor; // Quadratic — tip moves most
-
-                        // Multi-frequency wind
-                        // Use instance position (from instanceMatrix) to offset phase
-                        vec4 worldPos4 = instanceMatrix * vec4(pos, 1.0);
-                        float phase = worldPos4.x * 0.1 + worldPos4.z * 0.13;
-
-                        float wind1 = sin(uTime * 1.2 + phase) * 0.7;
-                        float wind2 = sin(uTime * 2.5 + phase * 1.5) * 0.3;
-                        float gust = sin(uTime * 0.4 + phase * 0.3) * sin(uTime * 0.4 + phase * 0.3); // Gusts
-
-                        float windOffset = (wind1 + wind2) * uWindStrength * heightFactor * (0.6 + gust * 0.4);
-
-                        pos.x += windOffset;
-                        pos.z += windOffset * 0.5; // Less sway in Z
-
-                        // Apply instance transform
-                        vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(pos, 1.0);
-                        vWorldPosition = (modelMatrix * instanceMatrix * vec4(pos, 1.0)).xyz;
-                        vNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);
-
-                        gl_Position = projectionMatrix * mvPosition;
-                    }
-                `,
-                fragmentShader: /* glsl */ `
-                    uniform vec3 uColor;
-                    uniform vec3 uEmissive;
-                    uniform float uEmissiveIntensity;
-                    uniform float uOpacity;
-
-                    varying vec3 vNormal;
-                    varying vec3 vWorldPosition;
-
-                    void main() {
-                        // Simple directional light (matching scene sun)
-                        vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
-                        float NdotL = max(dot(normalize(vNormal), lightDir), 0.0);
-
-                        // Hemisphere ambient (sky above, ground below)
-                        float upFactor = dot(normalize(vNormal), vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
-                        vec3 ambient = mix(vec3(0.08, 0.06, 0.04), vec3(0.15, 0.18, 0.25), upFactor);
-
-                        vec3 diffuse = uColor * (NdotL * 0.6 + 0.4);
-                        vec3 color = diffuse + ambient * uColor;
-
-                        // Emissive glow
-                        color += uEmissive * uEmissiveIntensity;
-
-                        gl_FragColor = vec4(color, uOpacity);
-                    }
-                `,
-                transparent: colors.opacity < 1.0,
+            // MeshStandardMaterial + onBeforeCompile wind injection
+            // Gets full PBR lighting, shadow casting/receiving, AND wind sway
+            const mat = new THREE.MeshStandardMaterial({
+                color: baseColor,
+                emissive: emissiveColor,
+                emissiveIntensity: hasGlow ? 0.4 : 0.0,
+                roughness: 0.7,
+                metalness: 0.0,
                 side: THREE.DoubleSide,
+                transparent: colors.opacity < 1.0,
+                opacity: colors.opacity,
             });
+
+            // Inject wind sway into vertex shader
+            mat.onBeforeCompile = (shader) => {
+                shader.uniforms.uTime = { value: 0.0 };
+                shader.uniforms.uWindStrength = { value: windStrength };
+
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <common>',
+                    `#include <common>
+                    uniform float uTime;
+                    uniform float uWindStrength;`
+                );
+
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <begin_vertex>',
+                    `#include <begin_vertex>
+                    float heightFactor = max(0.0, transformed.y + 0.5);
+                    heightFactor = heightFactor * heightFactor;
+                    vec4 wp4 = instanceMatrix * vec4(transformed, 1.0);
+                    float phase = wp4.x * 0.1 + wp4.z * 0.13;
+                    float wind1 = sin(uTime * 1.2 + phase) * 0.7;
+                    float wind2 = sin(uTime * 2.5 + phase * 1.5) * 0.3;
+                    float gust = sin(uTime * 0.4 + phase * 0.3);
+                    gust = gust * gust;
+                    float windOff = (wind1 + wind2) * uWindStrength * heightFactor * (0.6 + gust * 0.4);
+                    transformed.x += windOff;
+                    transformed.z += windOff * 0.5;`
+                );
+
+                mat.userData.shader = shader;
+            };
 
             // Scale and shape characteristics based on variant index
             const baseScales = [1.5, 1.2, 0.8, 0.6, 0.4]; // Decreasing size per variant
@@ -266,11 +232,12 @@ export class AlienFloraSystem {
 
         // Update time uniform for wind sway + animate emissive glow
         for (const ft of this.floraTypes) {
-            if (ft.material.uniforms) {
-                ft.material.uniforms.uTime.value = time;
-                if (ft.hasGlow) {
-                    ft.material.uniforms.uEmissiveIntensity.value = 0.25 + Math.sin(time * 1.5) * 0.2;
-                }
+            // MeshStandardMaterial with onBeforeCompile stores shader ref in userData
+            if (ft.material.userData && ft.material.userData.shader) {
+                ft.material.userData.shader.uniforms.uTime.value = time;
+            }
+            if (ft.hasGlow) {
+                ft.material.emissiveIntensity = 0.25 + Math.sin(time * 1.5) * 0.2;
             }
         }
     }
@@ -366,6 +333,8 @@ export class AlienFloraSystem {
                 ft.geometry, ft.material, plants.length
             );
             instancedMesh.frustumCulled = true;
+            instancedMesh.castShadow = true;
+            instancedMesh.receiveShadow = true;
 
             for (let j = 0; j < plants.length; j++) {
                 const p = plants[j];
