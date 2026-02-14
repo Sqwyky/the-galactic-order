@@ -312,6 +312,7 @@ let currentPhase = PHASE.DESCENT;
 // RENDERER
 // ============================================================
 setLoading(10, 'Creating renderer...');
+console.log('[TGO] Init: Creating renderer...');
 const canvas = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -325,24 +326,21 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // ============================================================
 // POST-PROCESSING — the NMS "cinematic painted sci-fi" look
 // ============================================================
-// Create render target with depth texture for ray-marched atmosphere
-const composerRT = new THREE.WebGLRenderTarget(
-    window.innerWidth * Math.min(window.devicePixelRatio, 2),
-    window.innerHeight * Math.min(window.devicePixelRatio, 2),
-    {
-        minFilter: THREE.LinearFilter,
-        magFilter: THREE.LinearFilter,
-        format: THREE.RGBAFormat,
-        type: THREE.HalfFloatType,
-        depthTexture: new THREE.DepthTexture(
-            window.innerWidth * Math.min(window.devicePixelRatio, 2),
-            window.innerHeight * Math.min(window.devicePixelRatio, 2)
-        ),
-    }
-);
-composerRT.depthTexture.format = THREE.DepthFormat;
-composerRT.depthTexture.type = THREE.UnsignedIntType;
-const composer = new EffectComposer(renderer, composerRT);
+// Standard EffectComposer — attach depth textures for ray-marched atmosphere
+console.log('[TGO] Init: Creating EffectComposer...');
+const composer = new EffectComposer(renderer);
+try {
+    const depthTex1 = new THREE.DepthTexture();
+    depthTex1.format = THREE.DepthFormat;
+    depthTex1.type = THREE.UnsignedIntType;
+    composer.renderTarget1.depthTexture = depthTex1;
+    const depthTex2 = new THREE.DepthTexture();
+    depthTex2.format = THREE.DepthFormat;
+    depthTex2.type = THREE.UnsignedIntType;
+    composer.renderTarget2.depthTexture = depthTex2;
+} catch (e) {
+    console.warn('[TGO] Depth texture setup failed:', e.message);
+}
 
 // Color Grading shader — cinematic NMS look: S-curve contrast, split toning,
 // chromatic aberration, vignette, subtle warm/cool shift
@@ -473,6 +471,7 @@ const scene = new THREE.Scene();
 // ============================================================
 // ATMOSPHERE / SKY
 // ============================================================
+console.log('[TGO] Init: Composer ready, generating atmosphere...');
 setLoading(15, 'Generating atmosphere...');
 
 // Determine atmosphere from Harmonic Resonance system (Antigravity Brain integration)
@@ -515,6 +514,7 @@ skyDome.addToScene(scene); // Also sets scene.background = null
 // ============================================================
 // LIGHTING
 // ============================================================
+console.log('[TGO] Init: Sky dome ready, creating lights...');
 setLoading(20, 'Igniting local star...');
 
 // Main sun — directional with shadow casting
@@ -573,18 +573,23 @@ ssaoPass.output = SSAOPass.OUTPUT.Default; // Blended with scene
 composer.addPass(ssaoPass);
 
 // Ray-marched atmosphere — volumetric scattering, aerial perspective, god rays
-const atmospherePass = new RayMarchedAtmospherePass(camera, {
-    skyColor: skyTopColor,
-    fogColor: fogColor,
-    sunColor: sunColor,
-    sunDirection: new THREE.Vector3(0.5, 0.3, 0.4).normalize(),
-    fogDensity: moodFogDensity,
-    scatterStrength: planetMood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
-    godRayStrength: 0.25,
-    aerialPerspective: 0.8,
-    heightFalloff: 0.08,
-});
-composer.addPass(atmospherePass);
+let atmospherePass = null;
+try {
+    atmospherePass = new RayMarchedAtmospherePass(camera, {
+        skyColor: skyTopColor,
+        fogColor: fogColor,
+        sunColor: sunColor,
+        sunDirection: new THREE.Vector3(0.5, 0.3, 0.4).normalize(),
+        fogDensity: moodFogDensity,
+        scatterStrength: planetMood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
+        godRayStrength: 0.25,
+        aerialPerspective: 0.8,
+        heightFalloff: 0.08,
+    });
+    composer.addPass(atmospherePass);
+} catch (e) {
+    console.warn('[TGO] Ray-marched atmosphere disabled:', e.message);
+}
 
 // Bloom — strength driven by planet mood (dreamlike Delta = more bloom, calm Alpha = less)
 const bloomPass = new UnrealBloomPass(
@@ -608,6 +613,7 @@ composer.addPass(new OutputPass());
 // ============================================================
 // TERRAIN
 // ============================================================
+console.log('[TGO] Init: Post-processing pipeline ready, generating terrain...');
 setLoading(30, `Generating terrain (Rule ${planetRule})...`);
 
 let terrainManager = new TerrainManager(scene, {
@@ -755,12 +761,18 @@ let npcManager = new NPCManager(scene, {
 // ============================================================
 // CREATURE SYSTEM — Procedural alien life forms
 // ============================================================
-let creatureSystem = new CreatureSystem(scene, {
-    planetRule: planetRule,
-    planetSeed: planetSeed,
-    getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
-    getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
-});
+let creatureSystem = null;
+console.log('[TGO] Init: Creating creature system...');
+try {
+    creatureSystem = new CreatureSystem(scene, {
+        planetRule: planetRule,
+        planetSeed: planetSeed,
+        getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
+        getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+    });
+} catch (e) {
+    console.warn('[TGO] Creature system disabled:', e.message);
+}
 
 // ============================================================
 // SHIP + FLIGHT SYSTEMS
@@ -843,7 +855,7 @@ function transitionToPlanet(newRule, newSeed) {
     alienFlora.dispose();
     atmosphericParticles.dispose();
     npcManager.dispose();
-    creatureSystem.dispose();
+    if (creatureSystem) creatureSystem.dispose();
 
     // ---- Update planet identity ----
     planetRule = newRule;
@@ -890,7 +902,7 @@ function transitionToPlanet(newRule, newSeed) {
     perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
 
     // ---- Update ray-marched atmosphere for new planet ----
-    atmospherePass.setAtmosphere({
+    if (atmospherePass) atmospherePass.setAtmosphere({
         skyColor: skyTopColor,
         fogColor: fogColor,
         sunColor: sunColor,
@@ -945,12 +957,17 @@ function transitionToPlanet(newRule, newSeed) {
     }, (x, z) => terrainManager.getHeightAt(x, z));
 
     // ---- Recreate creature system ----
-    creatureSystem = new CreatureSystem(scene, {
-        planetRule: planetRule,
-        planetSeed: planetSeed,
-        getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
-        getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
-    });
+    try {
+        creatureSystem = new CreatureSystem(scene, {
+            planetRule: planetRule,
+            planetSeed: planetSeed,
+            getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
+            getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+        });
+    } catch (e) {
+        console.warn('[TGO] Creature system recreation failed:', e.message);
+        creatureSystem = null;
+    }
 
     // ---- Reset encounter state ----
     encounterState = 'waiting';
@@ -1359,10 +1376,7 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
-    // Update depth render target size
-    const dpr = Math.min(window.devicePixelRatio, 2);
-    composerRT.setSize(window.innerWidth * dpr, window.innerHeight * dpr);
-    atmospherePass.setSize(window.innerWidth, window.innerHeight);
+    if (atmospherePass) atmospherePass.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ============================================================
@@ -1371,6 +1385,7 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 let frameCount = 0, lastFpsTime = 0;
 
+console.log('[TGO] Init: All systems ready, starting game loop...');
 setLoading(100, 'Entering atmosphere...');
 
 // Quick fade — the descent animation IS the loading experience
@@ -1441,7 +1456,7 @@ function animate() {
         npcManager.update(dt, camera.position);
 
         // Update alien creatures
-        creatureSystem.update(dt, camera.position);
+        if (creatureSystem) creatureSystem.update(dt, camera.position);
 
         // Check Mysterious Being proximity
         if (npcManager.mysteriousBeing && encounterState !== 'talking') {
