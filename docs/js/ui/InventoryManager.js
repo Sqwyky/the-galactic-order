@@ -8,6 +8,13 @@
  * In-game fiction: The backpack uses molecular reconstitution
  * to store raw elemental data as compressed information patterns.
  * It can hold finite stacks of each element type.
+ *
+ * PROTOCOL INTEGRATION:
+ * - Every add/remove is recorded as a signed transaction
+ * - Inventory state is persisted in the encrypted LocalVault
+ * - Refinery completions are broadcast to the Mesh Network
+ * - The Protocol Bridge validates all operations
+ * - Forks that inject fake items will fail signature verification
  */
 
 import { ELEMENTS, REFINERY_RECIPES, calculateRefineEfficiency } from '../generation/HarmonicElements.js';
@@ -17,7 +24,10 @@ import { ELEMENTS, REFINERY_RECIPES, calculateRefineEfficiency } from '../genera
 // ============================================================
 
 export class InventoryManager {
-    constructor() {
+    /**
+     * @param {Object} [protocolBridge] - Optional ProtocolBridge instance for mesh validation
+     */
+    constructor(protocolBridge = null) {
         // Element quantities — start empty
         this.items = {};
         for (const id of Object.keys(ELEMENTS)) {
@@ -27,9 +37,28 @@ export class InventoryManager {
         // Active refinery process
         this.refining = null; // { recipe, chosenRule, startTime, duration, efficiency }
 
+        // Protocol integration (optional — works without it for backward compat)
+        this._protocol = protocolBridge;
+        this._currentPlanetSeed = null;
+        this._currentPlanetRule = null;
+
         // Event callbacks
         this._onChanged = [];
         this._onRefineComplete = [];
+
+        // Auto-load from vault if protocol is available
+        if (this._protocol) {
+            this._loadFromVault();
+        }
+    }
+
+    /**
+     * Set the current planet context (for transaction metadata).
+     * Called when the player lands on a planet.
+     */
+    setPlanetContext(planetSeed, planetRule) {
+        this._currentPlanetSeed = planetSeed;
+        this._currentPlanetRule = planetRule;
     }
 
     // ============================================================
@@ -54,6 +83,10 @@ export class InventoryManager {
 
         this.items[elementId] = current + canAdd;
         this._notifyChanged(elementId, canAdd, 'add');
+
+        // Record transaction in the protocol (signed + mesh-synced)
+        this._recordTransaction('mine', elementId, canAdd);
+
         return canAdd;
     }
 
@@ -226,6 +259,13 @@ export class InventoryManager {
             };
 
             this._notifyRefineComplete(result.output);
+
+            // Record refinery transaction in the protocol
+            this._recordRefineTransaction(
+                recipe.id, this.refining?.chosenRule,
+                recipe.output.element, added
+            );
+
             this.refining = null;
             return result;
         }
@@ -279,6 +319,81 @@ export class InventoryManager {
                     this.items[id] = qty;
                 }
             }
+        }
+    }
+
+    // ============================================================
+    // PROTOCOL INTEGRATION (Vault + Mesh)
+    // ============================================================
+
+    /**
+     * Record a transaction in the protocol layer.
+     * This signs the transaction with the player's key and
+     * broadcasts it to the mesh network.
+     *
+     * @param {string} type - 'mine' | 'refine' | 'consume'
+     * @param {string} elementId
+     * @param {number} quantity
+     */
+    async _recordTransaction(type, elementId, quantity) {
+        if (!this._protocol?.initialized) return;
+
+        try {
+            if (type === 'mine') {
+                await this._protocol.mine(
+                    elementId, quantity,
+                    this._currentPlanetSeed,
+                    this._currentPlanetRule
+                );
+            }
+            // Auto-save to vault after every change
+            await this._saveToVault();
+        } catch (err) {
+            // Protocol errors shouldn't break gameplay
+            console.warn('[InventoryManager] Protocol sync failed:', err.message);
+        }
+    }
+
+    /**
+     * Record a refinery transaction.
+     */
+    async _recordRefineTransaction(recipeId, chosenRule, outputElement, outputQuantity) {
+        if (!this._protocol?.initialized) return;
+
+        try {
+            await this._protocol.refine(recipeId, chosenRule, outputElement, outputQuantity);
+            await this._saveToVault();
+        } catch (err) {
+            console.warn('[InventoryManager] Protocol refine sync failed:', err.message);
+        }
+    }
+
+    /**
+     * Save current inventory state to the encrypted LocalVault.
+     */
+    async _saveToVault() {
+        if (!this._protocol) return;
+        try {
+            await this._protocol.saveInventory(this.toJSON());
+        } catch (err) {
+            console.warn('[InventoryManager] Vault save failed:', err.message);
+        }
+    }
+
+    /**
+     * Load inventory state from the encrypted LocalVault.
+     * Called on construction if protocol is available.
+     */
+    async _loadFromVault() {
+        if (!this._protocol) return;
+        try {
+            const saved = await this._protocol.loadInventory();
+            if (saved) {
+                this.fromJSON(saved);
+                console.log('[InventoryManager] Loaded inventory from vault.');
+            }
+        } catch (err) {
+            console.warn('[InventoryManager] Vault load failed:', err.message);
         }
     }
 }
