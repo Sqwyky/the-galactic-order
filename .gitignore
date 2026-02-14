@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.local
+*.local.json
+nul
+.DS_Store
+Thumbs.db
+.claude/

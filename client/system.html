@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Galactic Order - Star System</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+            cursor: crosshair;
+        }
+        #game-canvas { display: block; width: 100vw; height: 100vh; }
+
+        /* Vignette */
+        #vignette {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 5;
+            background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.5) 100%);
+        }
+
+        /* HUD overlay */
+        #hud {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        /* System info (top-left) */
+        #system-info {
+            position: absolute;
+            top: 16px; left: 16px;
+            pointer-events: all;
+        }
+        #system-info h1 {
+            font-size: 16px;
+            color: #00ff88;
+            letter-spacing: 4px;
+            margin-bottom: 4px;
+        }
+        #system-info .catalog {
+            color: #445;
+            font-size: 10px;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+        #system-info .star-type {
+            color: #888;
+            font-size: 11px;
+        }
+
+        /* Planet list (left sidebar) */
+        #planet-list {
+            position: absolute;
+            top: 100px; left: 16px;
+            pointer-events: all;
+            max-width: 280px;
+        }
+        .planet-entry {
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(0,255,136,0.1);
+            padding: 10px 14px;
+            margin-bottom: 4px;
+            cursor: pointer;
+            transition: all 0.3s;
+            backdrop-filter: blur(4px);
+        }
+        .planet-entry:hover {
+            border-color: rgba(0,255,136,0.5);
+            background: rgba(0,255,136,0.05);
+        }
+        .planet-entry.selected {
+            border-color: #00ff88;
+            background: rgba(0,255,136,0.1);
+        }
+        .planet-entry .name {
+            color: #ddd;
+            font-size: 13px;
+            letter-spacing: 2px;
+            margin-bottom: 3px;
+        }
+        .planet-entry .type {
+            color: #667;
+            font-size: 10px;
+            letter-spacing: 1px;
+        }
+        .planet-entry .rule-badge {
+            display: inline-block;
+            background: rgba(0,255,136,0.15);
+            color: #00ff88;
+            padding: 1px 6px;
+            font-size: 9px;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Flight HUD (center) */
+        #flight-hud {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+        #flight-hud.visible { opacity: 1; }
+        #flight-hud .target-name {
+            color: #00ff88;
+            font-size: 22px;
+            letter-spacing: 6px;
+            text-shadow: 0 0 20px rgba(0,255,136,0.4);
+        }
+        #flight-hud .speed {
+            color: #445;
+            font-size: 12px;
+            letter-spacing: 3px;
+            margin-top: 8px;
+        }
+        #flight-hud .warp-line {
+            width: 200px;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #00ff88, transparent);
+            margin: 12px auto;
+            transform: scaleX(0);
+            transition: transform 0.3s;
+        }
+
+        /* Planet detail panel (right side, visible when orbiting) */
+        #planet-detail {
+            position: absolute;
+            top: 16px; right: 16px;
+            width: 260px;
+            pointer-events: all;
+            background: rgba(0,0,0,0.75);
+            border: 1px solid rgba(0,255,136,0.2);
+            padding: 16px;
+            opacity: 0;
+            transform: translateX(20px);
+            transition: all 0.5s;
+            backdrop-filter: blur(4px);
+        }
+        #planet-detail.visible {
+            opacity: 1;
+            transform: translateX(0);
+        }
+        #planet-detail h2 {
+            color: #00ff88;
+            font-size: 14px;
+            letter-spacing: 3px;
+            margin-bottom: 12px;
+        }
+        #planet-detail .stat {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        #planet-detail .stat .label {
+            color: #556;
+            font-size: 10px;
+            letter-spacing: 1px;
+        }
+        #planet-detail .stat .value {
+            color: #aab;
+            font-size: 10px;
+        }
+        #planet-detail .biome-bar {
+            height: 6px;
+            background: #111;
+            margin-top: 12px;
+            display: flex;
+            overflow: hidden;
+        }
+        #planet-detail .biome-segment {
+            height: 100%;
+            transition: width 0.5s;
+        }
+        #planet-detail .back-btn {
+            display: block;
+            width: 100%;
+            margin-top: 16px;
+            padding: 6px;
+            background: transparent;
+            border: 1px solid rgba(0,255,136,0.3);
+            color: #00ff88;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        #planet-detail .back-btn:hover {
+            background: rgba(0,255,136,0.1);
+            border-color: #00ff88;
+        }
+
+        /* Navigation controls */
+        #nav-controls {
+            position: absolute;
+            bottom: 16px; left: 16px;
+            pointer-events: all;
+        }
+        .nav-btn {
+            display: inline-block;
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(0,255,136,0.2);
+            color: #00ff88;
+            padding: 6px 14px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            margin-right: 4px;
+            transition: all 0.3s;
+        }
+        .nav-btn:hover {
+            background: rgba(0,255,136,0.1);
+            border-color: #00ff88;
+        }
+
+        /* System coordinates */
+        #coords {
+            position: absolute;
+            bottom: 16px; right: 16px;
+            color: #334;
+            font-size: 10px;
+            letter-spacing: 1px;
+        }
+
+        /* Perf stats */
+        #perf {
+            position: absolute;
+            top: 16px; right: 16px;
+            color: #333;
+            font-size: 10px;
+            text-align: right;
+        }
+
+        /* Loading */
+        #loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 1.5s;
+        }
+        #loading.fade { opacity: 0; pointer-events: none; }
+        #loading h2 {
+            color: #00ff88;
+            font-size: 18px;
+            letter-spacing: 6px;
+            margin-bottom: 20px;
+        }
+        #loading .bar { width: 300px; height: 2px; background: #111; }
+        #loading .bar-fill { height: 100%; background: #00ff88; width: 0%; transition: width 0.3s; }
+        #loading .status { color: #444; font-size: 11px; margin-top: 12px; }
+
+        /* Warp speed lines effect */
+        #warp-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 4;
+            opacity: 0;
+            background: radial-gradient(ellipse at center,
+                transparent 30%,
+                rgba(0,100,255,0.03) 60%,
+                rgba(0,150,255,0.08) 100%
+            );
+            transition: opacity 0.3s;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="game-canvas"></canvas>
+<div id="vignette"></div>
+<div id="warp-overlay"></div>
+
+<div id="hud">
+    <div id="system-info">
+        <h1 id="starName">LOADING...</h1>
+        <div class="catalog" id="starCatalog"></div>
+        <div class="star-type" id="starType"></div>
+    </div>
+
+    <div id="planet-list"></div>
+
+    <div id="flight-hud">
+        <div class="target-name" id="flightTarget"></div>
+        <div class="warp-line" id="warpLine"></div>
+        <div class="speed" id="flightSpeed"></div>
+    </div>
+
+    <div id="planet-detail">
+        <h2 id="detailName"></h2>
+        <div class="stat"><span class="label">TYPE</span><span class="value" id="detailType"></span></div>
+        <div class="stat"><span class="label">RULE</span><span class="value" id="detailRule"></span></div>
+        <div class="stat"><span class="label">CLASS</span><span class="value" id="detailClass"></span></div>
+        <div class="stat"><span class="label">SIZE</span><span class="value" id="detailSize"></span></div>
+        <div class="stat"><span class="label">MOONS</span><span class="value" id="detailMoons"></span></div>
+        <div class="stat"><span class="label">RINGS</span><span class="value" id="detailRings"></span></div>
+        <div class="stat"><span class="label">HAZARD</span><span class="value" id="detailHazard"></span></div>
+        <div class="biome-bar" id="biomeBar"></div>
+        <button class="back-btn" id="backBtn">◄ RETURN TO SYSTEM</button>
+    </div>
+
+    <div id="nav-controls">
+        <button class="nav-btn" id="prevSystem">◄ PREV SYSTEM</button>
+        <button class="nav-btn" id="nextSystem">NEXT SYSTEM ►</button>
+        <button class="nav-btn" id="randomSystem">✦ RANDOM</button>
+    </div>
+
+    <div id="coords"></div>
+    <div id="perf"></div>
+</div>
+
+<div id="loading">
+    <h2>THE GALACTIC ORDER</h2>
+    <div class="bar"><div class="bar-fill" id="loadingBar"></div></div>
+    <div class="status" id="loadingStatus">Warping to system...</div>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { UniverseManager, STAR_TYPES } from './js/universe/UniverseManager.js';
+import { buildPlanet, buildPlanetIcon } from './js/rendering/PlanetRenderer.js';
+import { FlightController, FLIGHT_STATE } from './js/rendering/FlightController.js';
+import { seededRandom, hashSeed } from './js/generation/hashSeed.js';
+
+// ============================================================
+// LOADING
+// ============================================================
+const loadingEl = document.getElementById('loading');
+const loadingBar = document.getElementById('loadingBar');
+const loadingStatus = document.getElementById('loadingStatus');
+function setLoading(pct, msg) {
+    loadingBar.style.width = pct + '%';
+    loadingStatus.textContent = msg;
+}
+
+// ============================================================
+// RENDERER
+// ============================================================
+setLoading(5, 'Creating renderer...');
+const canvas = document.getElementById('game-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.3;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x010108);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.01, 10000);
+camera.position.set(15, 20, 30);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 2;
+controls.maxDistance = 100;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.05;
+
+// ============================================================
+// FLIGHT CONTROLLER
+// ============================================================
+const flight = new FlightController(camera, controls);
+
+// ============================================================
+// UNIVERSE MANAGER
+// ============================================================
+const universe = new UniverseManager(42);
+let currentSystemCoords = { x: 42, y: 17 };
+let currentSystem = null;
+let selectedPlanetIndex = -1;
+
+// ============================================================
+// SCENE OBJECTS
+// ============================================================
+let starMesh = null;
+let starGlow = null;
+let planetObjects = []; // { ghost, icon, fullPlanet, orbitLine, label }
+let orbitLines = [];
+
+// ============================================================
+// LIGHTING
+// ============================================================
+setLoading(10, 'Igniting star...');
+const sunLight = new THREE.PointLight(0xffeedd, 50, 200);
+sunLight.position.set(0, 0, 0);
+scene.add(sunLight);
+
+const ambientLight = new THREE.AmbientLight(0x112244, 0.4);
+scene.add(ambientLight);
+
+const hemiLight = new THREE.HemisphereLight(0x6699cc, 0x221100, 0.3);
+scene.add(hemiLight);
+
+// ============================================================
+// STARFIELD
+// ============================================================
+setLoading(15, 'Seeding starfield...');
+function createStarfield() {
+    const count = 8000;
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const rng = seededRandom('starfield', 0);
+    for (let i = 0; i < count; i++) {
+        const theta = rng() * Math.PI * 2;
+        const phi = Math.acos(2 * rng() - 1);
+        const r = 500 + rng() * 500;
+        positions[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+        positions[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        positions[i*3+2] = r * Math.cos(phi);
+        const brightness = 0.4 + rng() * 0.6;
+        colors[i*3] = brightness * (rng() < 0.3 ? 0.8 : 1.0);
+        colors[i*3+1] = brightness * (rng() < 0.5 ? 0.9 : 1.0);
+        colors[i*3+2] = brightness;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    return new THREE.Points(geo, new THREE.PointsMaterial({
+        size: 1.0, vertexColors: true, transparent: true, opacity: 0.85, sizeAttenuation: false
+    }));
+}
+scene.add(createStarfield());
+
+// ============================================================
+// SUN GLOW TEXTURE
+// ============================================================
+function createGlowTexture(innerColor, outerColor) {
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    g.addColorStop(0, innerColor);
+    g.addColorStop(0.15, innerColor);
+    g.addColorStop(0.4, outerColor);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(c);
+}
+
+// ============================================================
+// BUILD STAR SYSTEM
+// ============================================================
+function clearSystem() {
+    // Remove old planet objects
+    for (const po of planetObjects) {
+        if (po.icon) { scene.remove(po.icon.mesh); po.icon.dispose(); }
+        if (po.fullPlanet) { scene.remove(po.fullPlanet.group); po.fullPlanet.dispose(); }
+        if (po.orbitLine) scene.remove(po.orbitLine);
+    }
+    planetObjects = [];
+
+    // Remove star
+    if (starMesh) { scene.remove(starMesh); starMesh = null; }
+    if (starGlow) { scene.remove(starGlow); starGlow = null; }
+}
+
+function buildSystem(systemX, systemY) {
+    clearSystem();
+    setLoading(20, 'Generating star system...');
+
+    currentSystemCoords = { x: systemX, y: systemY };
+    currentSystem = universe.enterSystem(systemX, systemY);
+    selectedPlanetIndex = -1;
+
+    const star = currentSystem.star;
+
+    // ---- STAR MESH ----
+    setLoading(30, `Igniting ${star.name}...`);
+    const starColor = new THREE.Color(
+        star.type.color[0] / 255,
+        star.type.color[1] / 255,
+        star.type.color[2] / 255,
+    );
+    const starRadius = star.type.size * 0.8;
+
+    const starGeo = new THREE.SphereGeometry(starRadius, 32, 32);
+    const starMat = new THREE.MeshBasicMaterial({ color: starColor });
+    starMesh = new THREE.Mesh(starGeo, starMat);
+    scene.add(starMesh);
+
+    // Star glow sprite
+    const glowMat = new THREE.SpriteMaterial({
+        map: createGlowTexture(
+            `rgba(${star.type.color[0]},${star.type.color[1]},${star.type.color[2]},1)`,
+            `rgba(${star.type.color[0]},${star.type.color[1]},${star.type.color[2]},0)`
+        ),
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+    });
+    starGlow = new THREE.Sprite(glowMat);
+    starGlow.scale.set(starRadius * 8, starRadius * 8, 1);
+    scene.add(starGlow);
+
+    // Update point light to match star
+    sunLight.color.copy(starColor);
+    sunLight.intensity = star.type.luminosity * 30;
+
+    // ---- PLANETS ----
+    setLoading(50, 'Materializing planets...');
+    const planets = currentSystem.planets;
+
+    for (let i = 0; i < planets.length; i++) {
+        const ghost = planets[i];
+
+        // Build icon (LOD 0 — simple colored sphere)
+        const icon = buildPlanetIcon(ghost);
+        scene.add(icon.mesh);
+
+        // Position on orbit
+        const angle = ghost.currentAngle;
+        icon.mesh.position.set(
+            Math.cos(angle) * ghost.orbitRadius,
+            Math.sin(ghost.orbitTilt * 3) * ghost.orbitRadius * 0.05,
+            Math.sin(angle) * ghost.orbitRadius
+        );
+
+        // Orbit line (subtle ring)
+        const orbitGeo = new THREE.RingGeometry(
+            ghost.orbitRadius - 0.02,
+            ghost.orbitRadius + 0.02,
+            128
+        );
+        const orbitMat = new THREE.MeshBasicMaterial({
+            color: 0x111122,
+            transparent: true,
+            opacity: 0.3,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+        const orbitLine = new THREE.Mesh(orbitGeo, orbitMat);
+        orbitLine.rotation.x = -Math.PI / 2;
+        scene.add(orbitLine);
+
+        planetObjects.push({
+            ghost,
+            icon,
+            fullPlanet: null,
+            orbitLine,
+        });
+    }
+
+    // ---- UI ----
+    setLoading(80, 'Updating HUD...');
+    document.getElementById('starName').textContent = star.name.toUpperCase();
+    document.getElementById('starCatalog').textContent = star.catalog;
+    document.getElementById('starType').textContent = `${star.type.name}  ·  ${planets.length} planets`;
+
+    // Planet list
+    const listEl = document.getElementById('planet-list');
+    listEl.innerHTML = '';
+    for (let i = 0; i < planets.length; i++) {
+        const p = planets[i];
+        const entry = document.createElement('div');
+        entry.className = 'planet-entry';
+        entry.innerHTML = `
+            <div class="name">${p.name.toUpperCase()}</div>
+            <div class="type">${p.archetype.name}${p.isGasGiant ? ' (Gas Giant)' : ''} · ${p.size.toFixed(1)}x</div>
+            <span class="rule-badge">RULE ${p.rule} · CLASS ${p.ruleClass}</span>
+        `;
+        entry.addEventListener('click', () => flyToPlanet(i));
+        listEl.appendChild(entry);
+    }
+
+    document.getElementById('coords').textContent =
+        `SECTOR ${systemX}, ${systemY}  ·  GALAXY 0`;
+
+    // Camera position for system overview
+    const maxOrbit = Math.max(...planets.map(p => p.orbitRadius));
+    const viewDist = maxOrbit * 1.2;
+    camera.position.set(viewDist * 0.5, viewDist * 0.6, viewDist * 0.5);
+    controls.target.set(0, 0, 0);
+    controls.maxDistance = viewDist * 2;
+    controls.update();
+
+    // Fade out loading
+    setLoading(100, 'System online.');
+    setTimeout(() => {
+        loadingEl.classList.add('fade');
+        setTimeout(() => { loadingEl.style.display = 'none'; }, 1500);
+    }, 300);
+}
+
+// ============================================================
+// FLY TO PLANET
+// ============================================================
+function flyToPlanet(index) {
+    if (flight.isAnimating()) return;
+
+    selectedPlanetIndex = index;
+    const po = planetObjects[index];
+    const ghost = po.ghost;
+    const worldPos = po.icon.mesh.position.clone();
+
+    // Highlight in planet list
+    document.querySelectorAll('.planet-entry').forEach((el, i) => {
+        el.classList.toggle('selected', i === index);
+    });
+
+    // Show flight HUD
+    const flightHud = document.getElementById('flight-hud');
+    flightHud.classList.add('visible');
+    document.getElementById('flightTarget').textContent = ghost.name.toUpperCase();
+
+    // Initiate flight
+    flight.flyTo(ghost, worldPos, (arrivedPlanet) => {
+        onArrivedAtPlanet(index);
+    });
+}
+
+// ============================================================
+// ARRIVED AT PLANET — build full 3D mesh
+// ============================================================
+function onArrivedAtPlanet(index) {
+    const po = planetObjects[index];
+    const ghost = po.ghost;
+
+    // Hide flight HUD
+    document.getElementById('flight-hud').classList.remove('visible');
+
+    // Hide the icon, build full planet
+    po.icon.mesh.visible = false;
+
+    const sunDir = new THREE.Vector3().subVectors(
+        starMesh.position, po.icon.mesh.position
+    ).normalize().negate();
+
+    const fullPlanet = buildPlanet(ghost, {
+        lod: 2,
+        sunDirection: sunDir,
+        onProgress: (pct) => {},
+    });
+
+    fullPlanet.group.position.copy(po.icon.mesh.position);
+    scene.add(fullPlanet.group);
+    po.fullPlanet = fullPlanet;
+
+    // Show planet detail panel
+    showPlanetDetail(ghost, fullPlanet);
+}
+
+// ============================================================
+// PLANET DETAIL PANEL
+// ============================================================
+function showPlanetDetail(ghost, fullPlanet) {
+    const panel = document.getElementById('planet-detail');
+    panel.classList.add('visible');
+
+    document.getElementById('detailName').textContent = ghost.name.toUpperCase();
+    document.getElementById('detailType').textContent = ghost.archetype.name;
+    document.getElementById('detailRule').textContent = `Rule ${ghost.rule}`;
+    document.getElementById('detailClass').textContent = `Class ${ghost.ruleClass} (${ghost.ruleLabel})`;
+    document.getElementById('detailSize').textContent = `${ghost.size.toFixed(2)}x`;
+    document.getElementById('detailMoons').textContent = ghost.moonCount;
+    document.getElementById('detailRings').textContent = ghost.hasRings ? 'Yes' : 'No';
+    document.getElementById('detailHazard').textContent =
+        `${(ghost.archetype.hazardBase * 100).toFixed(0)}%`;
+
+    // Biome distribution bar
+    const dist = fullPlanet.getBiomeDistribution();
+    const biomeBar = document.getElementById('biomeBar');
+    biomeBar.innerHTML = '';
+    const NMS_COLORS = {
+        0: '10,25,80', 1: '20,60,140', 2: '220,200,140',
+        3: '230,180,80', 4: '180,200,60', 5: '60,180,50',
+        6: '25,140,40', 7: '15,90,30', 8: '60,100,50',
+        9: '160,140,120', 10: '240,245,255', 11: '200,230,250',
+    };
+    for (const d of dist) {
+        const seg = document.createElement('div');
+        seg.className = 'biome-segment';
+        seg.style.width = d.percentage + '%';
+        seg.style.background = `rgb(${NMS_COLORS[d.biome.id] || '255,0,255'})`;
+        seg.title = `${d.biome.name}: ${d.percentage}%`;
+        biomeBar.appendChild(seg);
+    }
+}
+
+function hidePlanetDetail() {
+    document.getElementById('planet-detail').classList.remove('visible');
+}
+
+// ============================================================
+// RETURN TO SYSTEM
+// ============================================================
+function returnToSystem() {
+    if (flight.isAnimating()) return;
+
+    hidePlanetDetail();
+
+    // Remove full planet mesh, show icon again
+    if (selectedPlanetIndex >= 0) {
+        const po = planetObjects[selectedPlanetIndex];
+        if (po.fullPlanet) {
+            scene.remove(po.fullPlanet.group);
+            po.fullPlanet.dispose();
+            po.fullPlanet = null;
+        }
+        po.icon.mesh.visible = true;
+    }
+
+    document.querySelectorAll('.planet-entry').forEach(el => {
+        el.classList.remove('selected');
+    });
+
+    const maxOrbit = currentSystem
+        ? Math.max(...currentSystem.planets.map(p => p.orbitRadius))
+        : 20;
+
+    flight.returnToSystem(new THREE.Vector3(0, 0, 0), maxOrbit * 1.2, () => {
+        selectedPlanetIndex = -1;
+    });
+}
+
+// ============================================================
+// NAVIGATE BETWEEN SYSTEMS
+// ============================================================
+function navigateSystem(dx, dy) {
+    loadingEl.style.display = 'flex';
+    loadingEl.classList.remove('fade');
+    setTimeout(() => {
+        buildSystem(currentSystemCoords.x + dx, currentSystemCoords.y + dy);
+    }, 50);
+}
+
+// ============================================================
+// RAYCASTER — click on planets
+// ============================================================
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+canvas.addEventListener('click', (e) => {
+    if (flight.isAnimating()) return;
+    if (flight.state === FLIGHT_STATE.ORBITING) return;
+
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    // Check planet icons
+    const iconMeshes = planetObjects.map(po => po.icon.mesh);
+    const hits = raycaster.intersectObjects(iconMeshes, true);
+
+    if (hits.length > 0) {
+        // Find which planet was clicked
+        for (let i = 0; i < planetObjects.length; i++) {
+            if (planetObjects[i].icon.mesh === hits[0].object ||
+                planetObjects[i].icon.mesh.children.includes(hits[0].object)) {
+                flyToPlanet(i);
+                break;
+            }
+        }
+    }
+});
+
+// ============================================================
+// EVENT LISTENERS
+// ============================================================
+document.getElementById('backBtn').addEventListener('click', returnToSystem);
+document.getElementById('prevSystem').addEventListener('click', () => navigateSystem(-1, 0));
+document.getElementById('nextSystem').addEventListener('click', () => navigateSystem(1, 0));
+document.getElementById('randomSystem').addEventListener('click', () => {
+    const rx = Math.floor(Math.random() * 200) - 100;
+    const ry = Math.floor(Math.random() * 200) - 100;
+    loadingEl.style.display = 'flex';
+    loadingEl.classList.remove('fade');
+    setTimeout(() => buildSystem(rx, ry), 50);
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && flight.state === FLIGHT_STATE.ORBITING) {
+        returnToSystem();
+    }
+    if (e.key === 'r' || e.key === 'R') {
+        const rx = Math.floor(Math.random() * 200) - 100;
+        const ry = Math.floor(Math.random() * 200) - 100;
+        loadingEl.style.display = 'flex';
+        loadingEl.classList.remove('fade');
+        setTimeout(() => buildSystem(rx, ry), 50);
+    }
+});
+
+// ============================================================
+// RESIZE
+// ============================================================
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+const clock = new THREE.Clock();
+let frameCount = 0, lastFpsTime = 0;
+
+function animate() {
+    requestAnimationFrame(animate);
+    const dt = clock.getDelta();
+    const t = clock.getElapsedTime();
+
+    // Update flight controller
+    flight.update(dt);
+
+    // Update controls (when not flying)
+    if (!flight.isAnimating()) {
+        controls.update();
+    }
+
+    // Animate planet orbits (when in system view)
+    for (const po of planetObjects) {
+        const ghost = po.ghost;
+        ghost.currentAngle += ghost.orbitSpeed * dt;
+
+        const angle = ghost.currentAngle;
+        const targetX = Math.cos(angle) * ghost.orbitRadius;
+        const targetZ = Math.sin(angle) * ghost.orbitRadius;
+        const targetY = Math.sin(ghost.orbitTilt * 3) * ghost.orbitRadius * 0.05;
+
+        po.icon.mesh.position.set(targetX, targetY, targetZ);
+
+        // If full planet is built, move it too
+        if (po.fullPlanet) {
+            po.fullPlanet.group.position.set(targetX, targetY, targetZ);
+            po.fullPlanet.update(dt);
+
+            // Update sun direction relative to planet
+            const sunDir = new THREE.Vector3(-targetX, -targetY, -targetZ).normalize();
+            po.fullPlanet.setSunDirection(sunDir);
+        }
+
+        // Rotate icon
+        po.icon.mesh.rotation.y += dt * 0.3;
+    }
+
+    // Warp visual effect
+    const warpOverlay = document.getElementById('warp-overlay');
+    if (flight.warpIntensity > 0.01) {
+        warpOverlay.style.opacity = flight.warpIntensity;
+        const warpLine = document.getElementById('warpLine');
+        warpLine.style.transform = `scaleX(${flight.warpIntensity})`;
+    } else {
+        warpOverlay.style.opacity = 0;
+    }
+
+    // Flight HUD speed
+    if (flight.isAnimating()) {
+        document.getElementById('flightSpeed').textContent =
+            `WARP ${flight.speed.toFixed(0)} · ${flight.distanceToTarget.toFixed(1)} LY`;
+    }
+
+    // Render
+    renderer.render(scene, camera);
+
+    // FPS
+    frameCount++;
+    if (t - lastFpsTime > 1) {
+        const fps = Math.round(frameCount / (t - lastFpsTime));
+        document.getElementById('perf').textContent =
+            `${fps} FPS · ${renderer.info.render.triangles} tris`;
+        frameCount = 0;
+        lastFpsTime = t;
+    }
+}
+
+// ============================================================
+// INIT
+// ============================================================
+buildSystem(42, 17);
+animate();
+
+</script>
+</body>
+</html>

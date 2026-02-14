@@ -1,0 +1,25 @@
+{
+  "name": "the-galactic-order",
+  "version": "0.0.1",
+  "description": "A web-based space exploration game built on cellular automata and fractal mathematics",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "setup": "node scripts/setup.js",
+    "generate-secret": "node scripts/generate-secret.js"
+  },
+  "keywords": [
+    "game",
+    "cellular-automata",
+    "procedural-generation",
+    "three.js",
+    "webgl"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}

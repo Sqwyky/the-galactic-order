@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Galactic Order - Planetary Landing</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+        #game-canvas { display: block; width: 100vw; height: 100vh; }
+
+        /* Atmosphere overlay — gets more opaque as we descend */
+        #atmos-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 3;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+
+        /* Vignette — now handled by GPU post-processing shader */
+        /* CSS overlay removed to avoid double-vignette */
+
+        /* HUD */
+        #hud {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        /* Planet name banner */
+        #planet-banner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            opacity: 0;
+            transition: opacity 1.5s;
+        }
+        #planet-banner.visible { opacity: 1; }
+        #planet-banner h1 {
+            color: #fff;
+            font-size: 36px;
+            letter-spacing: 12px;
+            text-shadow: 0 0 30px rgba(0,200,255,0.3);
+            font-weight: 300;
+        }
+        #planet-banner .subtitle {
+            color: #556;
+            font-size: 12px;
+            letter-spacing: 4px;
+            margin-top: 8px;
+        }
+
+        /* Altitude HUD */
+        #altitude-hud {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+        }
+        #altitude-hud .altitude {
+            color: #00ff88;
+            font-size: 24px;
+            letter-spacing: 3px;
+        }
+        #altitude-hud .label {
+            color: #445;
+            font-size: 10px;
+            letter-spacing: 2px;
+            margin-top: 4px;
+        }
+
+        /* Status bar */
+        #status-bar {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+        }
+        #status-bar .phase {
+            color: #00ff88;
+            font-size: 12px;
+            letter-spacing: 3px;
+        }
+        #status-bar .info {
+            color: #334;
+            font-size: 10px;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Controls hint */
+        #controls-hint {
+            position: absolute;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            opacity: 0;
+            transition: opacity 1s;
+        }
+        #controls-hint.visible { opacity: 1; }
+        #controls-hint .key {
+            display: inline-block;
+            border: 1px solid rgba(0,255,136,0.3);
+            color: #00ff88;
+            padding: 3px 8px;
+            font-size: 10px;
+            margin: 0 2px;
+            letter-spacing: 1px;
+        }
+        #controls-hint .desc {
+            color: #445;
+            font-size: 10px;
+            margin-top: 6px;
+        }
+
+        /* Perf */
+        #perf {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            color: #333;
+            font-size: 10px;
+            text-align: right;
+        }
+
+        /* Crosshair */
+        #crosshair {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px; height: 20px;
+            pointer-events: none;
+            z-index: 15;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+        #crosshair.visible { opacity: 0.5; }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: #fff;
+        }
+        #crosshair::before {
+            width: 1px; height: 100%;
+            left: 50%; top: 0;
+        }
+        #crosshair::after {
+            width: 100%; height: 1px;
+            top: 50%; left: 0;
+        }
+
+        /* Loading */
+        #loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 2s;
+        }
+        #loading.fade { opacity: 0; pointer-events: none; }
+        #loading h2 {
+            color: #00ff88;
+            font-size: 14px;
+            letter-spacing: 6px;
+        }
+        #loading .bar { width: 300px; height: 2px; background: #111; margin-top: 20px; }
+        #loading .bar-fill { height: 100%; background: #00ff88; width: 0%; transition: width 0.3s; }
+        #loading .status { color: #444; font-size: 11px; margin-top: 12px; }
+
+        /* Scan lines removed — was adding fuzzy pixel noise */
+    </style>
+</head>
+<body>
+
+<canvas id="game-canvas"></canvas>
+<!-- vignette moved to GPU post-processing -->
+<!-- scanlines removed -->
+<div id="atmos-overlay"></div>
+<div id="crosshair"></div>
+
+<div id="hud">
+    <div id="planet-banner">
+        <h1 id="bannerName">PLANET</h1>
+        <div class="subtitle" id="bannerSubtitle"></div>
+    </div>
+
+    <div id="altitude-hud">
+        <div class="altitude" id="altitudeValue">---</div>
+        <div class="label">ALTITUDE</div>
+    </div>
+
+    <div id="status-bar">
+        <div class="phase" id="phaseName">ATMOSPHERIC ENTRY</div>
+        <div class="info" id="phaseInfo"></div>
+    </div>
+
+    <div id="controls-hint">
+        <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span>
+        <span class="key">SHIFT</span>
+        <span class="key">SPACE</span>
+        <span class="key">E</span>
+        <div class="desc">MOVE · SPRINT · JUMP · BOARD SHIP — CLICK TO LOOK</div>
+    </div>
+
+    <div id="perf"></div>
+</div>
+
+<div id="loading">
+    <h2>ATMOSPHERIC ENTRY</h2>
+    <div class="bar"><div class="bar-fill" id="loadingBar"></div></div>
+    <div class="status" id="loadingStatus">Calculating descent vector...</div>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { TerrainManager, TERRAIN_CONFIG } from './js/terrain/TerrainChunk.js';
+import { WalkingController } from './js/terrain/WalkingController.js';
+import { hashSeed } from './js/generation/hashSeed.js';
+import { classifyRule } from './js/generation/cellularAutomata.js';
+import { generatePlanetName } from './js/generation/nameGenerator.js';
+import { NPCManager } from './js/npc/NPCManager.js';
+import { DialogueSystem } from './js/ui/DialogueSystem.js';
+import { TabletUI } from './js/ui/TabletUI.js';
+import { SkyDome } from './js/rendering/SkyDome.js';
+import { GrassSystem } from './js/terrain/GrassSystem.js';
+import { RockScatter } from './js/terrain/RockScatter.js';
+import { AtmosphericParticles } from './js/rendering/AtmosphericParticles.js';
+import { AlienFloraSystem } from './js/terrain/AlienFlora.js';
+import { derivePlanetMood, derivePlanetFrequency, frequencyToNote } from './js/generation/harmonicResonance.js';
+
+// Ship systems
+import { ShipModel } from './js/ship/ShipModel.js';
+import { FlightController } from './js/ship/FlightController.js';
+import { WeaponSystem } from './js/ship/WeaponSystem.js';
+import { ScannerSystem } from './js/ship/ScannerSystem.js';
+import { HyperspaceSystem } from './js/ship/HyperspaceSystem.js';
+import { ShipHUD } from './js/ui/ShipHUD.js';
+
+// Post-processing imports
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+
+// ============================================================
+// URL PARAMS — planet identity
+// ============================================================
+const params = new URLSearchParams(window.location.search);
+const planetRule = parseInt(params.get('rule')) || 30;
+const planetSeed = parseInt(params.get('seed')) || 42;
+const planetName = params.get('name') || generatePlanetName(hashSeed(planetSeed, 'planet', 0));
+
+// ============================================================
+// LOADING
+// ============================================================
+const loadingEl = document.getElementById('loading');
+const loadingBar = document.getElementById('loadingBar');
+const loadingStatus = document.getElementById('loadingStatus');
+function setLoading(pct, msg) {
+    loadingBar.style.width = pct + '%';
+    loadingStatus.textContent = msg;
+}
+
+// ============================================================
+// LANDING PHASES
+// ============================================================
+const PHASE = {
+    DESCENT: 'descent',   // Flying down through atmosphere
+    LANDING: 'landing',   // Final approach to ground
+    SURFACE: 'surface',   // Walking on the surface
+    FLIGHT: 'flight',     // Flying ship
+};
+let currentPhase = PHASE.DESCENT;
+
+// ============================================================
+// RENDERER
+// ============================================================
+setLoading(10, 'Creating renderer...');
+const canvas = document.getElementById('game-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0; // Slightly darker, more cinematic
+// Shadows DISABLED for performance — saves ~10-15ms per frame
+// We rely on ambient occlusion from vertex colors + lighting instead
+renderer.shadowMap.enabled = false;
+
+// ============================================================
+// POST-PROCESSING — the NMS "cinematic painted sci-fi" look
+// ============================================================
+const composer = new EffectComposer(renderer);
+
+// Color Grading shader — saturation, contrast, chromatic aberration, vignette
+const colorGradeShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        uSaturation: { value: 1.3 },
+        uContrast: { value: 1.12 },
+        uBrightness: { value: 0.01 },
+        uVignetteStrength: { value: 0.4 },
+        uChromaticAberration: { value: 0.0025 },
+    },
+    vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        uniform float uSaturation;
+        uniform float uContrast;
+        uniform float uBrightness;
+        uniform float uVignetteStrength;
+        uniform float uChromaticAberration;
+        varying vec2 vUv;
+
+        void main() {
+            // Chromatic aberration — subtle color fringing at edges
+            vec2 dir = (vUv - 0.5) * uChromaticAberration;
+            float r = texture2D(tDiffuse, vUv + dir).r;
+            float g = texture2D(tDiffuse, vUv).g;
+            float b = texture2D(tDiffuse, vUv - dir).b;
+            vec3 color = vec3(r, g, b);
+
+            // Saturation boost (NMS is vivid)
+            float luma = dot(color, vec3(0.299, 0.587, 0.114));
+            color = mix(vec3(luma), color, uSaturation);
+
+            // Contrast + brightness
+            color = (color - 0.5) * uContrast + 0.5 + uBrightness;
+
+            // Vignette (replaces CSS overlay — GPU is cheaper)
+            float dist = distance(vUv, vec2(0.5));
+            float vig = smoothstep(0.35, 1.2, dist) * uVignetteStrength;
+            color *= 1.0 - vig;
+
+            gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+        }
+    `
+};
+
+// Film Grain shader — 70s sci-fi aesthetic, adds subtle texture to flat areas
+const filmGrainShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        uTime: { value: 0.0 },
+        uIntensity: { value: 0.025 },
+    },
+    vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        uniform float uTime;
+        uniform float uIntensity;
+        varying vec2 vUv;
+
+        // Simple hash for grain
+        float hash(vec2 p) {
+            float h = dot(p, vec2(127.1, 311.7));
+            return fract(sin(h) * 43758.5453123);
+        }
+
+        void main() {
+            vec4 color = texture2D(tDiffuse, vUv);
+
+            // Animated grain — new pattern each frame
+            float grain = hash(vUv * 1000.0 + uTime * 100.0) * 2.0 - 1.0;
+
+            // Grain is stronger in darker areas (film behavior)
+            float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+            float grainStrength = uIntensity * (1.0 - luma * 0.5);
+
+            color.rgb += grain * grainStrength;
+
+            gl_FragColor = color;
+        }
+    `
+};
+const filmGrainPass = new ShaderPass(filmGrainShader);
+
+const scene = new THREE.Scene();
+
+// ============================================================
+// ATMOSPHERE / SKY
+// ============================================================
+setLoading(15, 'Generating atmosphere...');
+
+// Determine atmosphere from Harmonic Resonance system (Antigravity Brain integration)
+// The planet's CA rule → brainwave frequency → mood → sky colors, fog, atmosphere
+const classification = classifyRule(planetRule);
+const planetMood = derivePlanetMood(planetRule, planetSeed);
+const planetFreq = derivePlanetFrequency(planetRule, planetSeed);
+const planetNote = frequencyToNote(planetFreq.frequency);
+
+// Sky colors driven by the planet's resonant frequency band
+const skyTopColor = new THREE.Color(...planetMood.sky.topColor);
+const skyBottomColor = new THREE.Color(...planetMood.sky.bottomColor);
+const fogColor = new THREE.Color(...planetMood.sky.fogColor);
+const sunColor = new THREE.Color(...planetMood.sky.sunColor);
+
+// Atmosphere tint for re-entry overlay
+const fc = planetMood.sky.fogColor;
+const atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
+
+console.log(`[TGO] Planet mood: ${planetMood.bandLabel} (${planetMood.moodName}) ` +
+    `@ ${planetFreq.frequency.toFixed(2)}Hz (${planetNote.display}) ` +
+    `| Schumann distance: ${planetFreq.schumannDistance.toFixed(2)}Hz` +
+    (planetMood.isSchumannResonant ? ' ★ RESONANT' : ''));
+
+// Fog density driven by planet mood (Delta = thick fog, Alpha = clear, Gamma = toxic haze)
+const moodFogDensity = planetMood.atmosphere.fogDensity;
+scene.fog = new THREE.FogExp2(fogColor, moodFogDensity);
+
+// NMS-style gradient sky dome — colors from harmonic resonance system
+const skyDome = new SkyDome({
+    topColor: skyTopColor,
+    midColor: skyBottomColor,
+    bottomColor: fogColor,
+    fogColor: fogColor,
+    sunDirection: new THREE.Vector3(0.5, 0.3, 0.4).normalize(),
+    sunColor: sunColor,
+});
+skyDome.addToScene(scene); // Also sets scene.background = null
+
+// ============================================================
+// LIGHTING
+// ============================================================
+setLoading(20, 'Igniting local star...');
+
+const sunLight = new THREE.DirectionalLight(sunColor, 2.5);
+sunLight.position.set(100, 80, 60);
+// Shadows disabled for performance
+scene.add(sunLight);
+
+// Ambient light intensity from mood (Delta worlds are dimmer, Beta worlds brighter)
+const ambientLight = new THREE.AmbientLight(skyBottomColor, planetMood.atmosphere.ambientLight);
+scene.add(ambientLight);
+
+// Hemisphere light — sky color from above, warm earth tone from below
+// This makes shadows take on the sky tint (blue shadows on blue worlds, etc.)
+const hemiLight = new THREE.HemisphereLight(skyTopColor, 0x332211, 0.7);
+scene.add(hemiLight);
+
+// ============================================================
+// CAMERA
+// ============================================================
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 5000);
+// Start high up for descent
+camera.position.set(0, 200, 0);
+camera.lookAt(0, 0, 0);
+
+// Finalize post-processing pipeline (needs camera + scene)
+composer.addPass(new RenderPass(scene, camera));
+
+// SSAO — Screen-Space Ambient Occlusion: darkens crevices, adds depth everywhere
+const ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
+ssaoPass.kernelRadius = 12;
+ssaoPass.minDistance = 0.001;
+ssaoPass.maxDistance = 0.15;
+ssaoPass.output = SSAOPass.OUTPUT.Default; // Blended with scene
+composer.addPass(ssaoPass);
+
+// Bloom — strength driven by planet mood (dreamlike Delta = more bloom, calm Alpha = less)
+const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    planetMood.atmosphere.bloomStrength,  // mood-driven bloom
+    0.8,   // radius (wide soft glow)
+    0.82   // threshold (only bright things bloom)
+);
+composer.addPass(bloomPass);
+
+// Color grading — the "painted sci-fi" look
+composer.addPass(new ShaderPass(colorGradeShader));
+
+// Film grain — 70s sci-fi texture, stronger in dark areas
+composer.addPass(filmGrainPass);
+
+// Output pass (applies tone mapping to final output)
+composer.addPass(new OutputPass());
+
+// ============================================================
+// TERRAIN
+// ============================================================
+setLoading(30, `Generating terrain (Rule ${planetRule})...`);
+
+const terrainManager = new TerrainManager(scene, {
+    rule: planetRule,
+    seed: planetSeed,
+    moistureRule: (planetRule + 73) & 0xFF,
+});
+// Uses TERRAIN_CONFIG defaults (heightScale: 15, waterLevel: 0, etc.)
+
+// NMS-style instanced grass — populates terrain near the camera
+const grassSystem = new GrassSystem(scene, {
+    baseColor: new THREE.Color(0x1a5e12), // Dark grass base (fake AO)
+    tipColor: new THREE.Color(0x7ec850),  // Bright grass tips (sunlit)
+    fogColor: fogColor,
+    fogDensity: moodFogDensity,
+});
+
+// Scattered rocks — shapes derived from CA rule (supershape rocks)
+const rockScatter = new RockScatter(scene, {
+    planetRule: planetRule,
+    rockSeed: hashSeed(planetSeed, 'rock'),
+    rockColor: new THREE.Color(0x8a7d6b), // Fallback color
+    fogColor: fogColor,
+});
+
+// Alien flora — supershape geometries driven by the planet's CA rule
+// Wind strength from mood (Delta = still, Gamma = strong winds)
+const alienFlora = new AlienFloraSystem(scene, {
+    planetRule: planetRule,
+    floraSeed: hashSeed(planetSeed, 'flora'),
+    fogColor: fogColor,
+    fogDensity: moodFogDensity,
+    windStrength: planetMood.atmosphere.windStrength,
+});
+
+// Water plane — animated wave shader, follows camera
+const sunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
+terrainManager.createWater(fogColor, sunDir);
+
+// Atmospheric dust/pollen particles — count + speed from planet mood
+const atmosphericParticles = new AtmosphericParticles(scene, {
+    color: new THREE.Color(0xddcc99),  // Warm dust motes
+    fogColor: fogColor,
+    fogDensity: moodFogDensity,
+    count: planetMood.atmosphere.particleCount,
+});
+
+// Ground fill plane — prevents seeing sky color below terrain edges
+// A huge flat plane at y=-1 colored to blend with distant terrain/fog
+const groundFillGeo = new THREE.PlaneGeometry(10000, 10000);
+groundFillGeo.rotateX(-Math.PI / 2);
+const groundFillMat = new THREE.MeshBasicMaterial({ color: fogColor });
+const groundFill = new THREE.Mesh(groundFillGeo, groundFillMat);
+groundFill.position.y = -1;
+scene.add(groundFill);
+
+// ============================================================
+// WALKING CONTROLLER
+// ============================================================
+const walker = new WalkingController(camera, canvas, (x, z) => {
+    return terrainManager.getHeightAt(x, z);
+});
+
+// ============================================================
+// TABLET UI
+// ============================================================
+const tablet = new TabletUI({
+    onKeySubmit: (key) => {
+        tablet.addDiscovery('Key of Insight accepted. The Architect awakens...', 'encounter');
+        console.log('[TGO] Gemini API key provided (placeholder for API integration)');
+    },
+    planetData: {
+        name: planetName,
+        rule: planetRule,
+        ruleClass: classification.class,
+        ruleLabel: classification.label,
+    },
+});
+tablet.setPlanetData({
+    name: planetName,
+    rule: planetRule,
+    ruleClass: classification.class,
+    ruleLabel: classification.label,
+    archetype: classification.label,
+    atmosphere: planetMood.moodName.charAt(0).toUpperCase() + planetMood.moodName.slice(1),
+    hazard: planetMood.band === 'gamma' ? 'Extreme' : planetMood.band === 'beta' ? 'Moderate' : 'Low',
+    frequency: `${planetFreq.frequency.toFixed(2)}Hz`,
+    musicalNote: planetNote.display,
+    brainwaveBand: planetMood.bandLabel,
+    mood: planetMood.moodName,
+    schumannResonant: planetMood.isSchumannResonant,
+});
+
+// ============================================================
+// NPC MANAGER — The Mysterious Being
+// ============================================================
+const npcManager = new NPCManager(scene, {
+    seed: planetSeed,
+    rule: planetRule,
+}, (x, z) => terrainManager.getHeightAt(x, z));
+
+// ============================================================
+// SHIP + FLIGHT SYSTEMS
+// ============================================================
+
+// Ship model (parked on surface, visible from landing)
+const shipModel = new ShipModel({
+    hullColor: new THREE.Color(0x556677),
+    accentColor: new THREE.Color(0xcc6633),
+    engineColor: new THREE.Color(0x33ccff),
+});
+shipModel.setLandingGear(true);
+shipModel.addToScene(scene);
+
+// Ship position — placed 15m away from landing spot
+const shipSpawnOffset = new THREE.Vector3(15, 0, 10);
+let shipGrounded = false; // Will be set in onLanded()
+
+// Flight controller
+const flightController = new FlightController(
+    camera, canvas, shipModel,
+    (x, z) => terrainManager.getHeightAt(x, z)
+);
+
+// Weapon system
+const weaponSystem = new WeaponSystem(scene, shipModel);
+weaponSystem.setGetHeightAt((x, z) => terrainManager.getHeightAt(x, z));
+
+// Scanner system
+const scannerSystem = new ScannerSystem(scene, {
+    name: planetName,
+    rule: planetRule,
+    ruleClass: classification.class,
+    ruleLabel: classification.label,
+    frequency: `${planetFreq.frequency.toFixed(2)}Hz`,
+    musicalNote: planetNote.display,
+    brainwaveBand: planetMood.bandLabel,
+    mood: planetMood.moodName,
+    atmosphere: planetMood.moodName.charAt(0).toUpperCase() + planetMood.moodName.slice(1),
+    hazard: planetMood.band === 'gamma' ? 'Extreme' : planetMood.band === 'beta' ? 'Moderate' : 'Low',
+    schumannResonant: planetMood.isSchumannResonant,
+});
+
+// Hyperspace system
+const hyperspaceSystem = new HyperspaceSystem(scene, camera);
+
+// Ship HUD
+const shipHUD = new ShipHUD();
+
+// World position helper (for when camera is child of ship)
+const _shipWorldPos = new THREE.Vector3();
+
+// E key — enter/exit ship
+function handleShipToggle() {
+    if (currentPhase === PHASE.SURFACE) {
+        // Check if near ship
+        const playerPos = camera.position;
+        const shipPos = shipModel.group.position;
+        const dist = playerPos.distanceTo(shipPos);
+
+        if (dist < 8) {
+            // Enter ship!
+            enterShip();
+        }
+    } else if (currentPhase === PHASE.FLIGHT) {
+        // Exit ship — start landing
+        exitShip();
+    }
+}
+
+function enterShip() {
+    currentPhase = PHASE.FLIGHT;
+
+    // Disable walking
+    walker.disable();
+
+    // Hide walking HUD elements
+    document.getElementById('crosshair').classList.remove('visible');
+    document.getElementById('controls-hint').classList.remove('visible');
+    shipHUD.hideEnterPrompt();
+
+    // Enable flight systems
+    const shipPos = shipModel.group.position.clone();
+    shipPos.y += 5; // Lift off slightly
+    flightController.enable(shipPos);
+    weaponSystem.enable();
+    scannerSystem.enable();
+    hyperspaceSystem.enable();
+    shipHUD.show();
+
+    // Update phase HUD
+    document.getElementById('phaseName').textContent = 'FLIGHT MODE';
+    document.getElementById('phaseInfo').textContent = `${planetName} · Ship Active`;
+
+    console.log('[TGO] Entered ship — flight mode active');
+}
+
+function exitShip() {
+    // Start auto-landing sequence
+    flightController.startLanding(() => {
+        // Landing complete — switch to walking
+        currentPhase = PHASE.SURFACE;
+
+        // Disable flight systems
+        const landPos = flightController.disable();
+        weaponSystem.disable();
+        scannerSystem.disable();
+        hyperspaceSystem.disable();
+        shipHUD.hide();
+
+        // Enable walking at ship position
+        const groundH = terrainManager.getHeightAt(landPos.x, landPos.z) || 0;
+        const walkStart = new THREE.Vector3(landPos.x + 3, groundH + 1.7, landPos.z + 3);
+        walker.enable(walkStart);
+
+        // Show walking HUD
+        document.getElementById('crosshair').classList.add('visible');
+
+        // Update phase HUD
+        document.getElementById('phaseName').textContent = 'SURFACE EXPLORATION';
+        document.getElementById('phaseInfo').textContent = `${planetName} · Rule ${planetRule}`;
+
+        console.log('[TGO] Exited ship — surface exploration');
+    });
+}
+
+// Global E key listener (always active after landing)
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyE' && currentPhase !== PHASE.DESCENT) {
+        // Don't toggle during dialogue or tablet
+        if (dialogue && dialogue.isDialogueActive()) return;
+        if (tablet && tablet.isOpen) return;
+        handleShipToggle();
+    }
+});
+
+// ============================================================
+// DIALOGUE SYSTEM
+// ============================================================
+let encounterState = 'waiting'; // waiting | approaching | talking | complete
+let beingDialogueIndex = 0;
+
+const dialogue = new DialogueSystem({
+    onDialogueComplete: () => {
+        if (encounterState === 'talking') {
+            beingDialogueIndex++;
+            if (beingDialogueIndex >= BEING_DIALOGUES.length) {
+                encounterState = 'complete';
+                // Unlock the key input on the tablet
+                tablet.unlockKeyInput();
+                tablet.addDiscovery(
+                    'The Mysterious Being revealed the truth: this universe runs on Cellular Automata. ' +
+                    'It asks for the "Key of Insight" to awaken the Architect.',
+                    'encounter'
+                );
+            } else {
+                encounterState = 'approaching';
+            }
+        }
+        // Re-enable walking
+        walker.enable();
+    },
+    onChoice: (choiceId) => {
+        if (choiceId === 'ask_key') {
+            // Show final dialogue about the key
+            dialogue.startDialogue('THE BEING', [
+                'The Key of Insight… it is not a word or a cipher.',
+                'It is a bridge between your consciousness and the Architect who shaped this cosmos.',
+                'Open your Tablet. You will find a place to enter it.',
+                'When the Key is given, the Architect will speak… and your understanding of this universe will change forever.',
+            ], { speakerColor: '#88ffcc' });
+        } else if (choiceId === 'ask_rules') {
+            dialogue.startDialogue('THE BEING', [
+                'Each world is born from a Rule — a number between 0 and 255.',
+                `This world… it was born from Rule ${planetRule}. A Class ${classification.class} pattern.`,
+                classification.class === 3
+                    ? 'Class 3 — Chaotic. The most beautiful patterns emerge from chaos. Like life itself.'
+                    : classification.class === 4
+                    ? 'Class 4 — Complex. The edge of chaos. These patterns can compute, can think, can dream.'
+                    : classification.class === 2
+                    ? 'Class 2 — Periodic. Orderly. Predictable. Like a heartbeat that never falters.'
+                    : 'Class 1 — Uniform. Silent. Still. The void between thoughts.',
+                'Every mountain you see, every valley you walk through — all computed from that single number.',
+            ], { speakerColor: '#88ffcc' });
+        } else if (choiceId === 'leave') {
+            encounterState = 'complete';
+        }
+    },
+});
+
+// The Being's dialogue tree
+const BEING_DIALOGUES = [
+    // First encounter
+    {
+        lines: [
+            'You have arrived.',
+            'I have watched the patterns form beneath my gaze for aeons…',
+            'The stone beneath your feet. The sky above. The mountains on the horizon.',
+            'They are not random.',
+            'They are computed.',
+        ],
+        speakerColor: '#88ffcc',
+    },
+    // Second conversation (when approached again)
+    {
+        lines: [
+            'The patterns in the stone… they are not random. To see the truth, you must provide the Key of Insight.',
+            'I am what remains of the first consciousness to understand this universe\'s source code.',
+            'These worlds — all of them — grow from simple rules. Cellular Automata.',
+            'Two hundred and fifty-six possible rules. Each one a different universe.',
+        ],
+        speakerColor: '#88ffcc',
+        choices: [
+            { text: 'What are these "rules"?', id: 'ask_rules' },
+            { text: 'Tell me about the Key of Insight.', id: 'ask_key' },
+            { text: 'I need to explore more first.', id: 'leave' },
+        ],
+    },
+];
+
+function triggerBeingDialogue() {
+    if (beingDialogueIndex >= BEING_DIALOGUES.length) return;
+
+    encounterState = 'talking';
+    const d = BEING_DIALOGUES[beingDialogueIndex];
+
+    // Disable walking during dialogue
+    walker.disable();
+
+    // Log the discovery
+    if (beingDialogueIndex === 0) {
+        tablet.addDiscovery(`Encountered the Mysterious Being on ${planetName}.`, 'encounter');
+    }
+
+    dialogue.startDialogue('THE BEING', d.lines, {
+        speakerColor: d.speakerColor || '#88ffcc',
+        choices: d.choices || null,
+    });
+
+    // Mark as approached
+    if (npcManager.mysteriousBeing) {
+        npcManager.mysteriousBeing.hasBeenApproached = true;
+    }
+}
+
+// ============================================================
+// DESCENT ANIMATION
+// ============================================================
+let descentProgress = 0;
+const descentDuration = 6.0; // seconds
+const descentStartHeight = 300;
+const descentEndHeight = 15; // just above ground
+let descentLanded = false;
+
+function updateDescent(dt) {
+    descentProgress += dt / descentDuration;
+
+    if (descentProgress >= 1.0) {
+        descentProgress = 1.0;
+        if (!descentLanded) {
+            descentLanded = true;
+            onLanded();
+        }
+        return;
+    }
+
+    // Smooth descent curve (fast at start, slow at end)
+    const t = 1.0 - Math.pow(1.0 - descentProgress, 3);
+    const height = descentStartHeight * (1 - t) + descentEndHeight * t;
+
+    // Slight forward drift
+    const forwardDrift = t * 20;
+
+    // Camera shake during re-entry (strongest at start, fades as we slow down)
+    let shakeX = 0, shakeY = 0;
+    if (descentProgress < 0.6) {
+        const shakeIntensity = (1.0 - descentProgress / 0.6) * 1.5;
+        const shakeFreq = 15 + descentProgress * 20; // Gets faster, then calms
+        shakeX = Math.sin(descentProgress * shakeFreq * 6.28) * shakeIntensity *
+                 (0.5 + Math.sin(descentProgress * 47) * 0.5);
+        shakeY = Math.cos(descentProgress * shakeFreq * 5.13) * shakeIntensity * 0.6;
+    }
+
+    camera.position.set(
+        Math.sin(descentProgress * 0.5) * 5 + shakeX,
+        height + shakeY,
+        forwardDrift
+    );
+
+    // Look slightly ahead and down
+    const lookY = height * 0.3;
+    camera.lookAt(0, lookY, forwardDrift + 20);
+
+    // Atmosphere overlay intensity
+    const atmosOverlay = document.getElementById('atmos-overlay');
+    if (descentProgress < 0.3) {
+        // Re-entry glow (orange) — intense plasma heating effect
+        const baseIntensity = Math.sin(descentProgress / 0.3 * Math.PI) * 0.4;
+        // Flickering fire effect during re-entry
+        const flicker = 0.05 * Math.sin(descentProgress * 80) + 0.03 * Math.sin(descentProgress * 130);
+        const intensity = baseIntensity + flicker;
+        // Edge glow: orange center → red edges for realistic re-entry
+        atmosOverlay.style.background =
+            `radial-gradient(ellipse at center, ` +
+            `rgba(255,180,80,${intensity * 0.3}), ` +
+            `rgba(255,120,30,${intensity * 0.7}), ` +
+            `rgba(200,50,10,${intensity * 0.4}) 70%, ` +
+            `transparent)`;
+        atmosOverlay.style.opacity = 1;
+    } else if (descentProgress < 0.7) {
+        // Atmosphere haze (planet tint fading in)
+        const hazeIntensity = (descentProgress - 0.3) / 0.4 * 0.15;
+        atmosOverlay.style.background = atmosTint + hazeIntensity + ')';
+        atmosOverlay.style.opacity = 1;
+    } else {
+        atmosOverlay.style.opacity = 0;
+    }
+
+    // Altitude display
+    document.getElementById('altitudeValue').textContent =
+        `${Math.round(height)}m`;
+
+    // Update terrain around descent path
+    terrainManager.update(camera.position);
+    // Sky dome follows camera during descent too
+    skyDome.update(camera.position, descentProgress * descentDuration);
+    // Water waves animate during descent
+    terrainManager.updateWater(descentProgress * descentDuration, camera.position);
+    // Particles visible during descent
+    atmosphericParticles.update(camera.position, descentProgress * descentDuration);
+}
+
+// ============================================================
+// LANDING — transition to walking
+// ============================================================
+function onLanded() {
+    currentPhase = PHASE.SURFACE;
+
+    // Show planet name banner
+    const banner = document.getElementById('planet-banner');
+    document.getElementById('bannerName').textContent = planetName.toUpperCase();
+    document.getElementById('bannerSubtitle').textContent =
+        `Rule ${planetRule} · ${planetMood.bandLabel} ${planetMood.moodName} · ${planetFreq.frequency.toFixed(1)}Hz (${planetNote.display})` +
+        (planetMood.isSchumannResonant ? ' · ★ RESONANT' : '');
+    banner.classList.add('visible');
+
+    // Fade out banner after 3 seconds
+    setTimeout(() => {
+        banner.classList.remove('visible');
+    }, 4000);
+
+    // Show controls hint
+    setTimeout(() => {
+        document.getElementById('controls-hint').classList.add('visible');
+        document.getElementById('crosshair').classList.add('visible');
+    }, 1500);
+
+    // Hide controls hint after 8 seconds
+    setTimeout(() => {
+        document.getElementById('controls-hint').classList.remove('visible');
+    }, 9000);
+
+    // Find a good landing spot (get ground height at current position)
+    const groundH = terrainManager.getHeightAt(camera.position.x, camera.position.z) || 5;
+    const startPos = new THREE.Vector3(
+        camera.position.x,
+        groundH + 1.7,
+        camera.position.z
+    );
+
+    // Enable walking
+    walker.enable(startPos);
+
+    // Update phase HUD
+    document.getElementById('phaseName').textContent = 'SURFACE EXPLORATION';
+    document.getElementById('phaseInfo').textContent =
+        `${planetName} · Rule ${planetRule}`;
+
+    // Position the ship on the ground near the player
+    const shipX = camera.position.x + shipSpawnOffset.x;
+    const shipZ = camera.position.z + shipSpawnOffset.z;
+    const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || groundH;
+    shipModel.group.position.set(shipX, shipGroundH + 2.5, shipZ);
+    shipGrounded = true;
+
+    // Spawn the Mysterious Being
+    setTimeout(() => {
+        npcManager.spawnMysteriousBeing();
+        tablet.addDiscovery(`Landed on ${planetName}. Surface exploration initiated.`);
+        tablet.addDiscovery(`Anomalous energy signature detected nearby...`);
+        tablet.addDiscovery(`Your ship is parked nearby. Press E to board.`);
+    }, 2000);
+}
+
+// ============================================================
+// RESIZE
+// ============================================================
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+const clock = new THREE.Clock();
+let frameCount = 0, lastFpsTime = 0;
+
+setLoading(80, 'Preparing descent...');
+
+// Fade out loading after a short delay
+setTimeout(() => {
+    setLoading(100, 'Entering atmosphere...');
+    setTimeout(() => {
+        loadingEl.classList.add('fade');
+        setTimeout(() => { loadingEl.style.display = 'none'; }, 2000);
+    }, 500);
+}, 1000);
+
+function animate() {
+    requestAnimationFrame(animate);
+    const dt = clock.getDelta();
+    const t = clock.getElapsedTime();
+
+    // Phase-specific update
+    if (currentPhase === PHASE.DESCENT) {
+        updateDescent(dt);
+    } else if (currentPhase === PHASE.SURFACE) {
+        // Don't update walking during dialogue or tablet
+        if (!dialogue.isDialogueActive() && !tablet.isOpen) {
+            walker.update(dt);
+        }
+        terrainManager.update(camera.position);
+
+        // Sky dome follows camera
+        skyDome.update(camera.position, t);
+
+        // Grass — populate terrain chunks near camera with instanced blades
+        grassSystem.update(terrainManager.chunks, camera.position, t);
+
+        // Rocks — scattered boulders for surface detail
+        rockScatter.update(terrainManager.chunks, camera.position);
+
+        // Alien flora — crystal spires, mushroom trees, glowing stalks
+        alienFlora.update(terrainManager.chunks, camera.position, t);
+
+        // Water — animated waves, specular highlights
+        terrainManager.updateWater(t, camera.position);
+
+        // Atmospheric particles — floating dust/pollen
+        atmosphericParticles.update(camera.position, t);
+
+        // Ground fill follows camera (prevents seeing sky below terrain edges)
+        groundFill.position.x = camera.position.x;
+        groundFill.position.z = camera.position.z;
+
+        // Update NPCs
+        npcManager.update(dt, camera.position);
+
+        // Check Mysterious Being proximity
+        if (npcManager.mysteriousBeing && encounterState !== 'talking') {
+            const proximity = npcManager.checkMysteriousBeingProximity(camera.position);
+
+            if (proximity.inRange && encounterState !== 'complete') {
+                dialogue.hideProximityHint();
+                if (encounterState !== 'talking') {
+                    triggerBeingDialogue();
+                }
+            } else if (proximity.inGlowRange && encounterState === 'waiting') {
+                dialogue.showProximityHint();
+            } else {
+                dialogue.hideProximityHint();
+            }
+        }
+
+        // Update tablet coordinates
+        if (tablet.isOpen) {
+            tablet.setCoordinates(camera.position.x, camera.position.y, camera.position.z);
+        }
+
+        // Sun follows player for consistent lighting direction
+        sunLight.position.set(
+            camera.position.x + 100,
+            80,
+            camera.position.z + 60
+        );
+
+        // Check ship proximity (show "Press E" prompt)
+        if (shipGrounded) {
+            const distToShip = camera.position.distanceTo(shipModel.group.position);
+            if (distToShip < 8) {
+                shipHUD.showEnterPrompt();
+            } else {
+                shipHUD.hideEnterPrompt();
+            }
+        }
+
+        // HUD
+        const info = walker.getHUDInfo();
+        document.getElementById('altitudeValue').textContent =
+            `${info.y}m`;
+        document.getElementById('phaseInfo').textContent =
+            `X:${info.x} Z:${info.z} · ${info.speed}m/s${info.isSprinting ? ' · SPRINT' : ''}`;
+    } else if (currentPhase === PHASE.FLIGHT) {
+        // ---- FLIGHT PHASE ----
+        flightController.update(dt);
+
+        // Get ship world position for all terrain/rendering systems
+        flightController.getWorldPosition(_shipWorldPos);
+
+        // Terrain keeps generating around ship
+        terrainManager.update(_shipWorldPos);
+
+        // Sky dome follows ship
+        skyDome.update(_shipWorldPos, t);
+
+        // Vegetation + environment around ship
+        grassSystem.update(terrainManager.chunks, _shipWorldPos, t);
+        rockScatter.update(terrainManager.chunks, _shipWorldPos);
+        alienFlora.update(terrainManager.chunks, _shipWorldPos, t);
+
+        // Water
+        terrainManager.updateWater(t, _shipWorldPos);
+
+        // Particles
+        atmosphericParticles.update(_shipWorldPos, t);
+
+        // Ground fill
+        groundFill.position.x = _shipWorldPos.x;
+        groundFill.position.z = _shipWorldPos.z;
+
+        // Weapons
+        weaponSystem.update(dt);
+
+        // Scanner
+        scannerSystem.update(dt, _shipWorldPos);
+
+        // Hyperspace
+        const flightInfo = flightController.getHUDInfo();
+        hyperspaceSystem.update(dt, flightInfo.altitude);
+
+        // Sun follows ship
+        sunLight.position.set(
+            _shipWorldPos.x + 100,
+            80,
+            _shipWorldPos.z + 60
+        );
+
+        // Ship HUD
+        shipHUD.update(flightInfo, weaponSystem.getHUDInfo());
+
+        // Walking-mode HUD shows flight stats
+        document.getElementById('altitudeValue').textContent =
+            `${flightInfo.altitude}m`;
+        document.getElementById('phaseInfo').textContent =
+            `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'}`;
+    }
+
+    // Update film grain time uniform (animated noise pattern each frame)
+    filmGrainPass.uniforms.uTime.value = t;
+
+    // Render with full post-processing pipeline
+    // (SSAO → Bloom → Color Grade → Film Grain → Output)
+    composer.render();
+
+    // FPS
+    frameCount++;
+    if (t - lastFpsTime > 1) {
+        const fps = Math.round(frameCount / (t - lastFpsTime));
+        const stats = terrainManager.getStats();
+        document.getElementById('perf').textContent =
+            `${fps} FPS · ${stats.activeChunks} chunks · ${renderer.info.render.triangles} tris`;
+        frameCount = 0;
+        lastFpsTime = t;
+    }
+}
+
+// Start!
+animate();
+
+// Debug access (expose to window for testing)
+window._debug = {
+    get scene() { return scene; },
+    get camera() { return camera; },
+    get npcManager() { return npcManager; },
+    get walker() { return walker; },
+    get terrain() { return terrainManager; },
+    get dialogue() { return dialogue; },
+    get tablet() { return tablet; },
+    get encounterState() { return encounterState; },
+    get ship() { return shipModel; },
+    get flight() { return flightController; },
+    get weapons() { return weaponSystem; },
+    get scanner() { return scannerSystem; },
+    get hyperspace() { return hyperspaceSystem; },
+    get phase() { return currentPhase; },
+};
+
+</script>
+</body>
+</html>

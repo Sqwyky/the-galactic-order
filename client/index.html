@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Galactic Order - Phase 0: CA Engine Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            overflow-x: hidden;
+        }
+
+        header {
+            text-align: center;
+            padding: 20px;
+            border-bottom: 1px solid #222;
+        }
+
+        header h1 {
+            font-size: 24px;
+            color: #00ff88;
+            letter-spacing: 4px;
+        }
+
+        header p {
+            color: #666;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            padding: 16px;
+            background: #0d0d14;
+            border-bottom: 1px solid #222;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-group label {
+            color: #888;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        input[type="number"], select {
+            background: #111;
+            border: 1px solid #333;
+            color: #00ff88;
+            padding: 6px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            width: 80px;
+        }
+
+        select { width: auto; }
+
+        button {
+            background: #00ff88;
+            color: #000;
+            border: none;
+            padding: 8px 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            letter-spacing: 1px;
+        }
+
+        button:hover {
+            background: #00cc6a;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: #0d0d14;
+            border: 1px solid #222;
+            padding: 16px;
+        }
+
+        .panel h2 {
+            font-size: 14px;
+            color: #00ff88;
+            margin-bottom: 8px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .panel h3 {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 12px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border: 1px solid #1a1a1a;
+        }
+
+        .info {
+            margin-top: 8px;
+            font-size: 11px;
+            color: #555;
+            line-height: 1.6;
+        }
+
+        .info span {
+            color: #00ff88;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .stat-box {
+            background: #111;
+            padding: 8px;
+            text-align: center;
+        }
+
+        .stat-box .value {
+            font-size: 20px;
+            color: #00ff88;
+        }
+
+        .stat-box .label {
+            font-size: 10px;
+            color: #555;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        .biome-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .biome-chip {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            color: #888;
+        }
+
+        .biome-swatch {
+            width: 12px;
+            height: 12px;
+            border: 1px solid #333;
+        }
+
+        #timing {
+            color: #ffaa00;
+            font-size: 11px;
+            text-align: center;
+            padding: 4px;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>THE GALACTIC ORDER</h1>
+    <p>Phase 0: Cellular Automata Engine &mdash; The Foundation of the Universe</p>
+</header>
+
+<div class="controls">
+    <div class="control-group">
+        <label>Rule:</label>
+        <input type="number" id="ruleInput" value="30" min="0" max="255">
+    </div>
+    <div class="control-group">
+        <label>Width:</label>
+        <input type="number" id="widthInput" value="256" min="32" max="512" step="32">
+    </div>
+    <div class="control-group">
+        <label>Height:</label>
+        <input type="number" id="heightInput" value="256" min="32" max="512" step="32">
+    </div>
+    <div class="control-group">
+        <label>Seed:</label>
+        <input type="number" id="seedInput" value="42">
+    </div>
+    <div class="control-group">
+        <label>Mode:</label>
+        <select id="initMode">
+            <option value="single">Single Dot</option>
+            <option value="dual">Dual Dots (Two Big Bangs)</option>
+            <option value="random">Seeded Random</option>
+        </select>
+    </div>
+    <button onclick="generate()">GENERATE UNIVERSE</button>
+</div>
+
+<div id="timing"></div>
+
+<div class="grid-container">
+
+    <!-- Panel 1: Raw CA Pattern -->
+    <div class="panel">
+        <h2>Raw CA Pattern</h2>
+        <h3>The 1D rule running for N generations (your Python output, in the browser)</h3>
+        <canvas id="caCanvas" width="256" height="256"></canvas>
+        <div class="info" id="caInfo"></div>
+    </div>
+
+    <!-- Panel 2: Density Map -->
+    <div class="panel">
+        <h2>Density Map</h2>
+        <h3>8 overlaid CA runs = terrain density</h3>
+        <canvas id="densityCanvas" width="256" height="256"></canvas>
+        <div class="info" id="densityInfo"></div>
+    </div>
+
+    <!-- Panel 3: Smoothed Heightmap -->
+    <div class="panel">
+        <h2>Smoothed Heightmap</h2>
+        <h3>Multi-octave smoothing → ready for vertex displacement</h3>
+        <canvas id="heightCanvas" width="256" height="256"></canvas>
+        <div class="info" id="heightInfo"></div>
+    </div>
+
+    <!-- Panel 4: Biome Map -->
+    <div class="panel">
+        <h2>Biome Map</h2>
+        <h3>Elevation + moisture → 12 biome types</h3>
+        <canvas id="biomeCanvas" width="256" height="256"></canvas>
+        <div class="biome-legend" id="biomeLegend"></div>
+    </div>
+
+    <!-- Panel 5: Rule Classification -->
+    <div class="panel full-width">
+        <h2>Rule Analysis</h2>
+        <h3 id="ruleClass"></h3>
+        <div class="stats-grid" id="ruleStats"></div>
+        <div class="info" id="ruleTableInfo"></div>
+    </div>
+
+    <!-- Panel 6: Name Generation -->
+    <div class="panel full-width">
+        <h2>Procedural Names (from seed)</h2>
+        <div class="info" id="nameInfo"></div>
+    </div>
+</div>
+
+<script type="module">
+    import { applyRule, runCA1D, runCA1DDual, generateDensityGrid, classifyRule, getRuleTable, ruleToBinary } from './js/generation/cellularAutomata.js';
+    import { hashSeed, hashRange, generateSeedChain, seededRandom } from './js/generation/hashSeed.js';
+    import { generateHeightmap, heightmapStats } from './js/generation/heightmap.js';
+    import { generateBiomeMap, getBiomeColor, biomeDistribution, BIOMES } from './js/generation/biomeMap.js';
+    import { generateStarName, generatePlanetName, generateSpeciesName, generateFloraName, generateSystemLabel } from './js/generation/nameGenerator.js';
+
+    // Make generate() available globally
+    window.generate = generate;
+
+    function generate() {
+        const ruleNumber = parseInt(document.getElementById('ruleInput').value) || 30;
+        const width = parseInt(document.getElementById('widthInput').value) || 256;
+        const height = parseInt(document.getElementById('heightInput').value) || 256;
+        const seed = parseInt(document.getElementById('seedInput').value) || 42;
+        const initMode = document.getElementById('initMode').value;
+
+        const t0 = performance.now();
+
+        // ---- Panel 1: Raw CA ----
+        let initialCells;
+        if (initMode === 'dual') {
+            initialCells = [Math.floor(width / 2), Math.floor(width / 4)];
+        } else if (initMode === 'random') {
+            const rng = seededRandom(seed, 'init');
+            initialCells = [];
+            for (let i = 0; i < width; i++) {
+                if (rng() < 0.1) initialCells.push(i);
+            }
+        } else {
+            initialCells = [Math.floor(width / 2)];
+        }
+
+        const caGrid = runCA1D(ruleNumber, width, height, initialCells);
+        drawBinaryGrid('caCanvas', caGrid, width, height);
+
+        const t1 = performance.now();
+
+        // Count total alive cells
+        let totalAlive = 0;
+        for (const row of caGrid) {
+            for (const cell of row) totalAlive += cell;
+        }
+        document.getElementById('caInfo').innerHTML =
+            `Rule <span>${ruleNumber}</span> (${ruleToBinary(ruleNumber)}) | ` +
+            `${width}×${height} | Alive: <span>${totalAlive}</span> / ${width * height} ` +
+            `(${((totalAlive / (width * height)) * 100).toFixed(1)}%) | ` +
+            `<span>${(t1 - t0).toFixed(1)}ms</span>`;
+
+        // ---- Panel 2: Density Map ----
+        const density = generateDensityGrid(ruleNumber, width, height, seed, 8);
+        drawFloatGrid('densityCanvas', density, width, height, 'green');
+
+        const t2 = performance.now();
+        document.getElementById('densityInfo').innerHTML =
+            `8 overlaid runs with seed <span>${seed}</span> | <span>${(t2 - t1).toFixed(1)}ms</span>`;
+
+        // ---- Panel 3: Smoothed Heightmap ----
+        const heightmap = generateHeightmap(ruleNumber, width, height, seed);
+        drawFloatGrid('heightCanvas', heightmap, width, height, 'grayscale');
+
+        const t3 = performance.now();
+        const stats = heightmapStats(heightmap);
+        document.getElementById('heightInfo').innerHTML =
+            `Mean: <span>${stats.mean.toFixed(3)}</span> | ` +
+            `StdDev: <span>${stats.stddev.toFixed(3)}</span> | ` +
+            `<span>${(t3 - t2).toFixed(1)}ms</span>`;
+
+        // ---- Panel 4: Biome Map ----
+        const biomeData = generateBiomeMap(seed, width, height, { elevationRule: ruleNumber });
+        drawBiomeGrid('biomeCanvas', biomeData, width, height);
+
+        const t4 = performance.now();
+
+        // Biome legend
+        const dist = biomeDistribution(biomeData.biomeIds);
+        const legendEl = document.getElementById('biomeLegend');
+        legendEl.innerHTML = dist.map(d =>
+            `<div class="biome-chip">` +
+            `<div class="biome-swatch" style="background: rgb(${d.biome.color.join(',')})"></div>` +
+            `${d.biome.name}: ${d.percentage}%</div>`
+        ).join('');
+
+        // ---- Panel 5: Rule Classification ----
+        const classification = classifyRule(ruleNumber);
+        document.getElementById('ruleClass').textContent =
+            `Rule ${ruleNumber} → Class ${classification.class}: ${classification.label}`;
+
+        document.getElementById('ruleStats').innerHTML =
+            `<div class="stat-box"><div class="value">${classification.class}</div><div class="label">Wolfram Class</div></div>` +
+            `<div class="stat-box"><div class="value">${(classification.entropy * 100).toFixed(0)}%</div><div class="label">Entropy</div></div>` +
+            `<div class="stat-box"><div class="value">${(classification.density * 100).toFixed(0)}%</div><div class="label">Density</div></div>` +
+            `<div class="stat-box"><div class="value">${(classification.avgChange * 100).toFixed(0)}%</div><div class="label">Avg Change</div></div>`;
+
+        // Rule table
+        const table = getRuleTable(ruleNumber);
+        document.getElementById('ruleTableInfo').innerHTML =
+            `<br>Rule table: ` +
+            table.map(t => `${t.left}${t.center}${t.right}→<span>${t.output}</span>`).join(' | ');
+
+        // ---- Panel 6: Names ----
+        const chain = generateSeedChain(0, seed, 0, 0);
+        const systemLabel = generateSystemLabel(chain.system);
+        const names = [];
+        names.push(`System: <span>${systemLabel.name}</span> (${systemLabel.catalog})`);
+        for (let p = 0; p < 4; p++) {
+            const pChain = generateSeedChain(0, seed, 0, p);
+            names.push(`  Planet ${p}: <span>${generatePlanetName(pChain.planet)}</span> [Rule ${pChain.planetRule}]`);
+        }
+        names.push(`  Species: <span>${generateSpeciesName(seed * 7)}</span>, <span>${generateSpeciesName(seed * 13)}</span>, <span>${generateSpeciesName(seed * 31)}</span>`);
+        names.push(`  Flora: <span>${generateFloraName(seed * 11)}</span>, <span>${generateFloraName(seed * 17)}</span>`);
+        document.getElementById('nameInfo').innerHTML = names.join('<br>');
+
+        // ---- Timing ----
+        const tTotal = performance.now();
+        document.getElementById('timing').textContent =
+            `Total: ${(tTotal - t0).toFixed(1)}ms | CA: ${(t1 - t0).toFixed(1)}ms | Density: ${(t2 - t1).toFixed(1)}ms | Heightmap: ${(t3 - t2).toFixed(1)}ms | Biome: ${(t4 - t3).toFixed(1)}ms`;
+    }
+
+    // ---- DRAWING FUNCTIONS ----
+
+    function drawBinaryGrid(canvasId, grid, width, height) {
+        const canvas = document.getElementById(canvasId);
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.createImageData(width, height);
+        const data = imageData.data;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = (y * width + x) * 4;
+                if (grid[y][x] === 1) {
+                    data[idx] = 0;        // R
+                    data[idx + 1] = 255;  // G
+                    data[idx + 2] = 136;  // B
+                    data[idx + 3] = 255;  // A
+                } else {
+                    data[idx] = 10;
+                    data[idx + 1] = 10;
+                    data[idx + 2] = 15;
+                    data[idx + 3] = 255;
+                }
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+    }
+
+    function drawFloatGrid(canvasId, grid, width, height, colorMode) {
+        const canvas = document.getElementById(canvasId);
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.createImageData(width, height);
+        const data = imageData.data;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = (y * width + x) * 4;
+                const v = grid[y * width + x];
+
+                if (colorMode === 'green') {
+                    data[idx] = Math.floor(v * 30);
+                    data[idx + 1] = Math.floor(v * 255);
+                    data[idx + 2] = Math.floor(v * 100);
+                } else {
+                    // Grayscale
+                    const c = Math.floor(v * 255);
+                    data[idx] = c;
+                    data[idx + 1] = c;
+                    data[idx + 2] = c;
+                }
+                data[idx + 3] = 255;
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+    }
+
+    function drawBiomeGrid(canvasId, biomeData, width, height) {
+        const canvas = document.getElementById(canvasId);
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.createImageData(width, height);
+        const data = imageData.data;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = (y * width + x) * 4;
+                const biomeId = biomeData.biomeIds[y * width + x];
+                const color = getBiomeColor(biomeId);
+
+                // Modulate by elevation for depth
+                const elev = biomeData.elevation[y * width + x];
+                const shadow = 0.6 + elev * 0.4;
+
+                data[idx] = Math.floor(color[0] * shadow);
+                data[idx + 1] = Math.floor(color[1] * shadow);
+                data[idx + 2] = Math.floor(color[2] * shadow);
+                data[idx + 3] = 255;
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+    }
+
+    // Generate on load
+    generate();
+</script>
+
+</body>
+</html>

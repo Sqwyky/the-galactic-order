@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Galactic Order - Phase 1: First Planet</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+        #game-canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #hud {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #hud .controls {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            pointer-events: all;
+            background: rgba(0, 0, 0, 0.75);
+            border: 1px solid rgba(0, 255, 136, 0.25);
+            padding: 16px;
+            min-width: 240px;
+            backdrop-filter: blur(4px);
+        }
+
+        #hud h1 {
+            font-size: 13px;
+            color: #00ff88;
+            letter-spacing: 3px;
+            margin-bottom: 12px;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .control-row label {
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            min-width: 50px;
+        }
+
+        .control-row input, .control-row select {
+            background: rgba(0,0,0,0.6);
+            border: 1px solid #333;
+            color: #00ff88;
+            padding: 4px 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            width: 80px;
+        }
+
+        .control-row select { width: auto; }
+
+        button.generate {
+            background: #00ff88;
+            color: #000;
+            border: none;
+            padding: 6px 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            letter-spacing: 1px;
+            width: 100%;
+            margin-top: 8px;
+        }
+        button.generate:hover { background: #00cc6a; }
+
+        #planet-info {
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+        }
+
+        #planet-info .name {
+            font-size: 24px;
+            color: #fff;
+            letter-spacing: 4px;
+            text-shadow: 0 0 20px rgba(0,180,255,0.4);
+            margin-bottom: 4px;
+        }
+
+        #planet-info .details {
+            color: #667;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        #perf {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            color: #333;
+            font-size: 10px;
+            text-align: right;
+        }
+
+        #loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 1.5s;
+        }
+        #loading.fade { opacity: 0; pointer-events: none; }
+        #loading h2 {
+            color: #00ff88;
+            font-size: 18px;
+            letter-spacing: 6px;
+            margin-bottom: 20px;
+        }
+        #loading .bar { width: 300px; height: 2px; background: #111; }
+        #loading .bar-fill { height: 100%; background: #00ff88; width: 0%; transition: width 0.3s; }
+        #loading .status { color: #444; font-size: 11px; margin-top: 12px; }
+
+        /* Vignette overlay */
+        #vignette {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 5;
+            background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.5) 100%);
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="game-canvas"></canvas>
+<div id="vignette"></div>
+
+<div id="hud">
+    <div class="controls">
+        <h1>PLANET GEN</h1>
+        <div class="control-row">
+            <label>Rule:</label>
+            <input type="number" id="ruleInput" value="30" min="0" max="255">
+        </div>
+        <div class="control-row">
+            <label>Seed:</label>
+            <input type="number" id="seedInput" value="42">
+        </div>
+        <div class="control-row">
+            <label>Detail:</label>
+            <select id="detailInput">
+                <option value="5">Medium</option>
+                <option value="6" selected>High</option>
+                <option value="7">Ultra</option>
+            </select>
+        </div>
+        <button class="generate" onclick="window.regenerate()">GENERATE</button>
+    </div>
+
+    <div id="planet-info">
+        <div class="name" id="planetName"></div>
+        <div class="details" id="planetDetails"></div>
+    </div>
+
+    <div id="perf"></div>
+</div>
+
+<div id="loading">
+    <h2>THE GALACTIC ORDER</h2>
+    <div class="bar"><div class="bar-fill" id="loadingBar"></div></div>
+    <div class="status" id="loadingStatus">Initializing...</div>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { generateDensityGrid, classifyRule } from './js/generation/cellularAutomata.js';
+import { hashSeed, generateSeedChain, seededRandom } from './js/generation/hashSeed.js';
+import { generateHeightmap } from './js/generation/heightmap.js';
+import { generateBiomeMap, getBiomeColor, biomeDistribution, BIOMES, BIOME_BY_ID } from './js/generation/biomeMap.js';
+import { generatePlanetName, generateSystemLabel } from './js/generation/nameGenerator.js';
+
+// ============================================================
+// LOADING
+// ============================================================
+const loadingEl = document.getElementById('loading');
+const loadingBar = document.getElementById('loadingBar');
+const loadingStatus = document.getElementById('loadingStatus');
+function setLoading(pct, msg) {
+    loadingBar.style.width = pct + '%';
+    loadingStatus.textContent = msg;
+}
+
+// ============================================================
+// RENDERER
+// ============================================================
+setLoading(10, 'Creating renderer...');
+const canvas = document.getElementById('game-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020208);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 10000);
+camera.position.set(0, 0.5, 3.2);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 1.6;
+controls.maxDistance = 15;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.2;
+
+// ============================================================
+// LIGHTING — warm, bright, NMS-style
+// ============================================================
+setLoading(20, 'Igniting star...');
+
+// Main sunlight — warm and strong
+const sunLight = new THREE.DirectionalLight(0xffeedd, 3.0);
+sunLight.position.set(5, 2, 4);
+scene.add(sunLight);
+
+// Ambient — slight blue for shadow areas
+const ambientLight = new THREE.AmbientLight(0x334466, 0.8);
+scene.add(ambientLight);
+
+// Fill light from below — subtle warm bounce
+const fillLight = new THREE.DirectionalLight(0xffaa66, 0.4);
+fillLight.position.set(-2, -3, 1);
+scene.add(fillLight);
+
+// Hemisphere light — sky/ground color
+const hemiLight = new THREE.HemisphereLight(0x6699cc, 0x443322, 0.5);
+scene.add(hemiLight);
+
+// ============================================================
+// STARFIELD
+// ============================================================
+setLoading(25, 'Seeding starfield...');
+
+function createStarfield() {
+    const count = 10000;
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const rng = seededRandom('starfield', 0);
+
+    for (let i = 0; i < count; i++) {
+        const theta = rng() * Math.PI * 2;
+        const phi = Math.acos(2 * rng() - 1);
+        const r = 400 + rng() * 600;
+        positions[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+        positions[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        positions[i*3+2] = r * Math.cos(phi);
+
+        const brightness = 0.5 + rng() * 0.5;
+        const tint = rng();
+        colors[i*3]   = brightness * (tint < 0.3 ? 0.8 : 1.0);
+        colors[i*3+1] = brightness * (tint < 0.5 ? 0.9 : 1.0);
+        colors[i*3+2] = brightness;
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    return new THREE.Points(geo, new THREE.PointsMaterial({
+        size: 1.2, vertexColors: true, transparent: true, opacity: 0.9, sizeAttenuation: false
+    }));
+}
+scene.add(createStarfield());
+
+// ============================================================
+// SUN
+// ============================================================
+function createGlowTexture(innerColor, outerColor) {
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    g.addColorStop(0, innerColor);
+    g.addColorStop(0.15, innerColor);
+    g.addColorStop(0.4, outerColor);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(c);
+}
+
+function createSun() {
+    const group = new THREE.Group();
+
+    const coreMat = new THREE.SpriteMaterial({
+        map: createGlowTexture('rgba(255,255,240,1)', 'rgba(255,220,150,0.3)'),
+        color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+    });
+    const core = new THREE.Sprite(coreMat);
+    core.scale.set(3, 3, 1);
+    group.add(core);
+
+    const outerMat = new THREE.SpriteMaterial({
+        map: createGlowTexture('rgba(255,200,100,0.3)', 'rgba(255,150,50,0)'),
+        color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+    });
+    const outer = new THREE.Sprite(outerMat);
+    outer.scale.set(12, 12, 1);
+    group.add(outer);
+
+    group.position.copy(sunLight.position).normalize().multiplyScalar(60);
+    return group;
+}
+scene.add(createSun());
+
+// ============================================================
+// VIBRANT BIOME COLORS (NMS-style, much more saturated)
+// ============================================================
+const NMS_COLORS = {
+    0:  [10, 25, 80],      // Deep Ocean — dark blue
+    1:  [20, 60, 140],     // Ocean — medium blue
+    2:  [220, 200, 140],   // Beach — warm sand
+    3:  [230, 180, 80],    // Desert — golden orange
+    4:  [180, 200, 60],    // Savanna — yellow-green
+    5:  [60, 180, 50],     // Grassland — vivid green
+    6:  [25, 140, 40],     // Forest — rich green
+    7:  [15, 90, 30],      // Dense Forest — deep green
+    8:  [60, 100, 50],     // Swamp — murky green
+    9:  [160, 140, 120],   // Mountain — warm gray
+    10: [240, 245, 255],   // Snow Peak — bright white
+    11: [200, 230, 250],   // Ice — pale blue
+};
+
+function getNMSColor(biomeId) {
+    return NMS_COLORS[biomeId] || [255, 0, 255];
+}
+
+// ============================================================
+// ATMOSPHERE SHADERS
+// ============================================================
+const atmosVert = `
+    varying vec3 vNormal;
+    varying vec3 vWorldPos;
+    void main() {
+        vNormal = normalize(normalMatrix * normal);
+        vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+    }
+`;
+
+const atmosFrag = `
+    uniform vec3 uColor;
+    uniform vec3 uSunDir;
+    uniform float uIntensity;
+    varying vec3 vNormal;
+    varying vec3 vWorldPos;
+    void main() {
+        vec3 viewDir = normalize(cameraPosition - vWorldPos);
+        float rim = 1.0 - max(dot(viewDir, vNormal), 0.0);
+        float fresnel = pow(rim, 4.0) * uIntensity;
+
+        // Sun-side brightness
+        float sunDot = max(dot(vNormal, uSunDir), 0.0);
+        float sunGlow = pow(sunDot, 1.5) * 0.5;
+
+        // Scatter color shift — bluer away from sun
+        vec3 scatter = mix(uColor, uColor * 1.3, sunGlow);
+
+        float alpha = clamp(fresnel + sunGlow * 0.3, 0.0, 1.0);
+        gl_FragColor = vec4(scatter, alpha * 0.8);
+    }
+`;
+
+// Inner atmosphere (haze over surface)
+const innerAtmosFrag = `
+    uniform vec3 uColor;
+    uniform vec3 uSunDir;
+    varying vec3 vNormal;
+    varying vec3 vWorldPos;
+    void main() {
+        vec3 viewDir = normalize(cameraPosition - vWorldPos);
+        float rim = 1.0 - max(dot(viewDir, vNormal), 0.0);
+        float haze = pow(rim, 6.0) * 0.6;
+
+        float sunDot = max(dot(vNormal, uSunDir), 0.0);
+        float scatter = pow(sunDot, 3.0) * 0.15;
+
+        vec3 hazeColor = mix(uColor * 0.7, vec3(1.0, 0.95, 0.85), scatter);
+        float alpha = haze + scatter;
+        gl_FragColor = vec4(hazeColor, alpha);
+    }
+`;
+
+// ============================================================
+// PLANET GENERATION
+// ============================================================
+let planetGroup = null;
+
+function disposePlanet() {
+    if (!planetGroup) return;
+    planetGroup.traverse(child => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+            if (child.material.map) child.material.map.dispose();
+            child.material.dispose();
+        }
+    });
+    scene.remove(planetGroup);
+    planetGroup = null;
+}
+
+function generatePlanet(ruleNumber, seed, detailLevel) {
+    const t0 = performance.now();
+    disposePlanet();
+
+    planetGroup = new THREE.Group();
+    // Tilt the planet like a real planet
+    planetGroup.rotation.x = 0.15;
+    planetGroup.rotation.z = 0.08;
+
+    const resolution = Math.pow(2, detailLevel);
+    const subdivisions = detailLevel + 2; // More detail: 7, 8, or 9
+
+    setLoading(40, `Running Rule ${ruleNumber}...`);
+
+    // Generate terrain
+    const planetSeed = hashSeed(seed, 'planet', 0);
+    const biomeData = generateBiomeMap(planetSeed, resolution, resolution, {
+        elevationRule: ruleNumber
+    });
+
+    setLoading(60, 'Sculpting terrain...');
+
+    // ---- TERRAIN MESH ----
+    const terrainGeo = new THREE.IcosahedronGeometry(1, subdivisions);
+    const pos = terrainGeo.getAttribute('position');
+    const vertCount = pos.count;
+    const colors = new Float32Array(vertCount * 3);
+
+    const heightScale = 0.08;
+    const waterLevel = 0.15; // MUCH lower water — more land visible!
+
+    for (let i = 0; i < vertCount; i++) {
+        let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        const len = Math.sqrt(x*x + y*y + z*z);
+        const nx = x/len, ny = y/len, nz = z/len;
+
+        // Spherical UV
+        let u = 0.5 + Math.atan2(nz, nx) / (2 * Math.PI);
+        let v = 0.5 - Math.asin(Math.max(-1, Math.min(1, ny))) / Math.PI;
+
+        // Bilinear sample for smoother results
+        const fu = u * (resolution - 1);
+        const fv = v * (resolution - 1);
+        const px = Math.min(Math.floor(fu), resolution - 2);
+        const py = Math.min(Math.floor(fv), resolution - 2);
+        const fx = fu - px;
+        const fy = fv - py;
+
+        const i00 = py * resolution + px;
+        const i10 = py * resolution + px + 1;
+        const i01 = (py+1) * resolution + px;
+        const i11 = (py+1) * resolution + px + 1;
+
+        const e00 = biomeData.elevation[i00] || 0;
+        const e10 = biomeData.elevation[i10] || 0;
+        const e01 = biomeData.elevation[i01] || 0;
+        const e11 = biomeData.elevation[i11] || 0;
+        const elevation = e00*(1-fx)*(1-fy) + e10*fx*(1-fy) + e01*(1-fx)*fy + e11*fx*fy;
+
+        const biomeId = biomeData.biomeIds[Math.round(fv) * resolution + Math.round(fu)] || 0;
+
+        // Displace terrain above water level
+        let displacement = 0;
+        if (elevation > waterLevel) {
+            displacement = (elevation - waterLevel) * heightScale;
+            // Extra height for mountains
+            if (elevation > 0.7) {
+                displacement += (elevation - 0.7) * heightScale * 2.0;
+            }
+        } else {
+            // Below water: slight depression for ocean floor feel
+            displacement = -0.003;
+        }
+
+        pos.setX(i, nx * (1 + displacement));
+        pos.setY(i, ny * (1 + displacement));
+        pos.setZ(i, nz * (1 + displacement));
+
+        // Color
+        let r, g, b;
+        if (elevation <= waterLevel) {
+            // Water color by depth
+            const depth = 1.0 - (elevation / waterLevel);
+            r = (10 + depth * 5) / 255;
+            g = (40 + depth * 10) / 255;
+            b = (120 + depth * 40) / 255;
+        } else {
+            const col = getNMSColor(biomeId);
+            // Vary color by elevation for richness
+            const elevFactor = 0.7 + elevation * 0.3;
+            // Add slight random variation for less uniform look
+            const uSeed = hashSeed(Math.round(fu * 10), Math.round(fv * 10));
+            const variation = ((uSeed & 0xFF) / 255 - 0.5) * 0.08;
+
+            r = Math.max(0, Math.min(1, (col[0] / 255) * elevFactor + variation));
+            g = Math.max(0, Math.min(1, (col[1] / 255) * elevFactor + variation));
+            b = Math.max(0, Math.min(1, (col[2] / 255) * elevFactor + variation));
+        }
+        colors[i*3] = r;
+        colors[i*3+1] = g;
+        colors[i*3+2] = b;
+    }
+
+    terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    terrainGeo.computeVertexNormals();
+
+    const terrainMat = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.8,
+        metalness: 0.02,
+        flatShading: false
+    });
+
+    const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+    planetGroup.add(terrain);
+
+    setLoading(70, 'Filling oceans...');
+
+    // ---- OCEAN (separate glossy sphere) ----
+    const oceanGeo = new THREE.SphereGeometry(0.998, 64, 64);
+    const oceanMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(0.02, 0.08, 0.25),
+        roughness: 0.15,
+        metalness: 0.3,
+        transparent: true,
+        opacity: 0.92,
+    });
+    const ocean = new THREE.Mesh(oceanGeo, oceanMat);
+    planetGroup.add(ocean);
+
+    setLoading(80, 'Generating atmosphere...');
+
+    // ---- ATMOSPHERE ----
+    const classification = classifyRule(ruleNumber);
+    let atmosColor;
+    const rng = seededRandom(seed, 'atmos_color');
+    switch (classification.class) {
+        case 1: atmosColor = new THREE.Color(0.3, 0.3, 0.35); break;
+        case 2: atmosColor = new THREE.Color(0.3+rng()*0.2, 0.5+rng()*0.2, 0.9); break;
+        case 3: atmosColor = new THREE.Color(0.2+rng()*0.15, 0.5+rng()*0.3, 0.8+rng()*0.2); break;
+        case 4: atmosColor = new THREE.Color(0.4+rng()*0.2, 0.3+rng()*0.2, 0.8+rng()*0.2); break;
+        default: atmosColor = new THREE.Color(0.3, 0.55, 0.9);
+    }
+
+    const sunDir = sunLight.position.clone().normalize();
+
+    // Outer atmosphere glow
+    const outerAtmosGeo = new THREE.SphereGeometry(1.12, 64, 64);
+    const outerAtmosMat = new THREE.ShaderMaterial({
+        vertexShader: atmosVert,
+        fragmentShader: atmosFrag,
+        uniforms: {
+            uColor: { value: atmosColor },
+            uSunDir: { value: sunDir },
+            uIntensity: { value: 1.2 }
+        },
+        transparent: true,
+        side: THREE.BackSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    planetGroup.add(new THREE.Mesh(outerAtmosGeo, outerAtmosMat));
+
+    // Inner atmosphere (horizon haze)
+    const innerAtmosGeo = new THREE.SphereGeometry(1.03, 64, 64);
+    const innerAtmosMat = new THREE.ShaderMaterial({
+        vertexShader: atmosVert,
+        fragmentShader: innerAtmosFrag,
+        uniforms: {
+            uColor: { value: atmosColor },
+            uSunDir: { value: sunDir }
+        },
+        transparent: true,
+        side: THREE.FrontSide,
+        depthWrite: false,
+        blending: THREE.NormalBlending
+    });
+    planetGroup.add(new THREE.Mesh(innerAtmosGeo, innerAtmosMat));
+
+    setLoading(90, 'Adding clouds...');
+
+    // ---- CLOUDS ----
+    const cloudGeo = new THREE.SphereGeometry(1.02, 48, 48);
+    const cloudPos = cloudGeo.getAttribute('position');
+    const cloudColors = new Float32Array(cloudPos.count * 3);
+    const cloudAlphas = [];
+
+    const cloudDensity = generateDensityGrid(
+        (ruleNumber + 73) & 0xFF, 64, 64,
+        hashSeed(seed, 'cloud'), 4
+    );
+
+    for (let i = 0; i < cloudPos.count; i++) {
+        let cx = cloudPos.getX(i), cy = cloudPos.getY(i), cz = cloudPos.getZ(i);
+        const cl = Math.sqrt(cx*cx+cy*cy+cz*cz);
+        let cu = 0.5 + Math.atan2(cz/cl, cx/cl) / (2*Math.PI);
+        let cv = 0.5 - Math.asin(cy/cl) / Math.PI;
+        const cpx = Math.floor(cu * 63);
+        const cpy = Math.floor(cv * 63);
+        const cd = cloudDensity[cpy * 64 + cpx] || 0;
+
+        cloudColors[i*3] = 1;
+        cloudColors[i*3+1] = 1;
+        cloudColors[i*3+2] = 1;
+    }
+
+    cloudGeo.setAttribute('color', new THREE.BufferAttribute(cloudColors, 3));
+    const cloudMat = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.08,
+        roughness: 1,
+        metalness: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide
+    });
+    const cloudMesh = new THREE.Mesh(cloudGeo, cloudMat);
+    planetGroup.add(cloudMesh);
+    planetGroup.userData.clouds = cloudMesh;
+
+    scene.add(planetGroup);
+
+    setLoading(100, 'Done.');
+    const elapsed = performance.now() - t0;
+
+    // ---- UI ----
+    const name = generatePlanetName(planetSeed);
+    const chain = generateSeedChain(0, seed, 0, 0);
+    const systemLabel = generateSystemLabel(chain.system);
+    document.getElementById('planetName').textContent = name.toUpperCase();
+
+    const dist = biomeDistribution(biomeData.biomeIds);
+    const topBiomes = dist.slice(0, 3).map(d => `${d.biome.name} ${d.percentage}%`).join('  ·  ');
+    document.getElementById('planetDetails').textContent =
+        `Rule ${ruleNumber}  ·  Class ${classification.class} ${classification.label}  ·  ${systemLabel.name}  ·  ${topBiomes}  ·  ${elapsed.toFixed(0)}ms`;
+
+    // Fade out loading
+    setTimeout(() => {
+        loadingEl.classList.add('fade');
+        setTimeout(() => { loadingEl.style.display = 'none'; }, 1500);
+    }, 200);
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+const clock = new THREE.Clock();
+let frameCount = 0, lastFpsTime = 0;
+
+function animate() {
+    requestAnimationFrame(animate);
+    const dt = clock.getDelta();
+    const t = clock.getElapsedTime();
+    controls.update();
+
+    if (planetGroup) {
+        // Slow rotation
+        planetGroup.rotation.y += dt * 0.015;
+        // Clouds rotate separately (slightly faster)
+        if (planetGroup.userData.clouds) {
+            planetGroup.userData.clouds.rotation.y += dt * 0.008;
+        }
+    }
+
+    renderer.render(scene, camera);
+
+    frameCount++;
+    if (t - lastFpsTime > 1) {
+        const fps = Math.round(frameCount / (t - lastFpsTime));
+        document.getElementById('perf').textContent =
+            `${fps} FPS  ·  ${renderer.info.render.triangles} tris`;
+        frameCount = 0;
+        lastFpsTime = t;
+    }
+}
+
+// ============================================================
+// RESIZE
+// ============================================================
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ============================================================
+// REGENERATE
+// ============================================================
+window.regenerate = function() {
+    const rule = parseInt(document.getElementById('ruleInput').value) || 30;
+    const seed = parseInt(document.getElementById('seedInput').value) || 42;
+    const detail = parseInt(document.getElementById('detailInput').value) || 6;
+    loadingEl.style.display = 'flex';
+    loadingEl.classList.remove('fade');
+    requestAnimationFrame(() => requestAnimationFrame(() => generatePlanet(rule, seed, detail)));
+};
+
+// ============================================================
+// INIT
+// ============================================================
+generatePlanet(30, 42, 6);
+animate();
+
+</script>
+</body>
+</html>
