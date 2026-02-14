@@ -11,7 +11,7 @@ import { join, extname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const CLIENT_DIR = join(__dirname, '..', 'client');
+const CLIENT_DIR = join(__dirname, '..', 'docs');
 const PORT = 3000;
 
 const MIME_TYPES = {
