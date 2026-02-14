@@ -309,10 +309,12 @@ export class TerrainChunkMesh {
         geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geo.computeVertexNormals();
 
-        // MeshLambertMaterial is MUCH cheaper than MeshStandard (~3x faster)
-        const mat = new THREE.MeshLambertMaterial({
+        // MeshStandardMaterial with PBR for shadow receiving and depth
+        const mat = new THREE.MeshStandardMaterial({
             vertexColors: true,
             flatShading: false,
+            roughness: 0.85,
+            metalness: 0.02,
         });
 
         this.geometry = geo;
@@ -320,9 +322,9 @@ export class TerrainChunkMesh {
         this.mesh = new THREE.Mesh(geo, mat);
         this.mesh.position.set(this.worldX, 0, this.worldZ);
 
-        // Shadows disabled for performance
+        // Terrain receives shadows from sun (flora/rocks cast)
         this.mesh.castShadow = false;
-        this.mesh.receiveShadow = false;
+        this.mesh.receiveShadow = true;
 
         this.state = 'ready';
         return this.mesh;

@@ -313,25 +313,26 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0; // Slightly darker, more cinematic
-// Shadows DISABLED for performance — saves ~10-15ms per frame
-// We rely on ambient occlusion from vertex colors + lighting instead
-renderer.shadowMap.enabled = false;
+renderer.toneMappingExposure = 1.1;
+// Soft shadow maps — controlled by performance tier (disabled on LOW/POTATO)
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // ============================================================
 // POST-PROCESSING — the NMS "cinematic painted sci-fi" look
 // ============================================================
 const composer = new EffectComposer(renderer);
 
-// Color Grading shader — saturation, contrast, chromatic aberration, vignette
+// Color Grading shader — cinematic NMS look: S-curve contrast, split toning,
+// chromatic aberration, vignette, subtle warm/cool shift
 const colorGradeShader = {
     uniforms: {
         tDiffuse: { value: null },
         uSaturation: { value: 1.3 },
         uContrast: { value: 1.12 },
         uBrightness: { value: 0.01 },
-        uVignetteStrength: { value: 0.4 },
-        uChromaticAberration: { value: 0.0025 },
+        uVignetteStrength: { value: 0.45 },
+        uChromaticAberration: { value: 0.003 },
     },
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -349,24 +350,41 @@ const colorGradeShader = {
         uniform float uChromaticAberration;
         varying vec2 vUv;
 
+        // Filmic S-curve tone map (more cinematic than linear contrast)
+        vec3 sCurve(vec3 x) {
+            return x * x * (3.0 - 2.0 * x);
+        }
+
         void main() {
-            // Chromatic aberration — subtle color fringing at edges
-            vec2 dir = (vUv - 0.5) * uChromaticAberration;
+            // Radial chromatic aberration — stronger at screen edges
+            vec2 center = vUv - 0.5;
+            float edgeDist = length(center);
+            vec2 dir = center * uChromaticAberration * (1.0 + edgeDist * 2.0);
             float r = texture2D(tDiffuse, vUv + dir).r;
             float g = texture2D(tDiffuse, vUv).g;
             float b = texture2D(tDiffuse, vUv - dir).b;
             vec3 color = vec3(r, g, b);
 
-            // Saturation boost (NMS is vivid)
+            // Saturation boost (NMS vivid palette)
             float luma = dot(color, vec3(0.299, 0.587, 0.114));
             color = mix(vec3(luma), color, uSaturation);
 
-            // Contrast + brightness
-            color = (color - 0.5) * uContrast + 0.5 + uBrightness;
+            // S-curve contrast (smooth, filmic — lifts shadows, compresses highlights)
+            color = clamp(color, 0.0, 1.0);
+            color = mix(color, sCurve(color), uContrast - 1.0 + 0.4);
+            color += uBrightness;
 
-            // Vignette (replaces CSS overlay — GPU is cheaper)
-            float dist = distance(vUv, vec2(0.5));
-            float vig = smoothstep(0.35, 1.2, dist) * uVignetteStrength;
+            // Split toning — warm highlights (gold), cool shadows (blue)
+            vec3 warmTint  = vec3(1.02, 0.98, 0.92);  // Subtle gold
+            vec3 coolTint  = vec3(0.92, 0.95, 1.05);  // Subtle blue
+            float lumaSplit = dot(color, vec3(0.299, 0.587, 0.114));
+            vec3 tint = mix(coolTint, warmTint, smoothstep(0.25, 0.75, lumaSplit));
+            color *= tint;
+
+            // Vignette — smooth elliptical falloff, cinematic
+            float vigDist = length(center * vec2(1.1, 1.0));
+            float vig = smoothstep(0.3, 1.1, vigDist) * uVignetteStrength;
+            vig += smoothstep(0.6, 1.3, vigDist) * uVignetteStrength * 0.3; // Extra darkening at corners
             color *= 1.0 - vig;
 
             gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
@@ -374,7 +392,7 @@ const colorGradeShader = {
     `
 };
 
-// Film Grain shader — 70s sci-fi aesthetic, adds subtle texture to flat areas
+// Film Grain shader — dual-frequency grain for photographic 70s sci-fi texture
 const filmGrainShader = {
     uniforms: {
         tDiffuse: { value: null },
@@ -394,23 +412,34 @@ const filmGrainShader = {
         uniform float uIntensity;
         varying vec2 vUv;
 
-        // Simple hash for grain
         float hash(vec2 p) {
             float h = dot(p, vec2(127.1, 311.7));
             return fract(sin(h) * 43758.5453123);
+        }
+        float hash2(vec2 p) {
+            float h = dot(p, vec2(269.5, 183.3));
+            return fract(sin(h) * 28786.3157832);
         }
 
         void main() {
             vec4 color = texture2D(tDiffuse, vUv);
 
-            // Animated grain — new pattern each frame
-            float grain = hash(vUv * 1000.0 + uTime * 100.0) * 2.0 - 1.0;
+            // Dual-frequency grain — fine + coarse for photographic feel
+            float fineGrain  = hash(vUv * 1200.0 + uTime * 137.0) * 2.0 - 1.0;
+            float coarseGrain = hash2(vUv * 300.0 + uTime * 89.0) * 2.0 - 1.0;
+            float grain = fineGrain * 0.7 + coarseGrain * 0.3;
 
-            // Grain is stronger in darker areas (film behavior)
+            // Grain is stronger in shadows (real film response)
             float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-            float grainStrength = uIntensity * (1.0 - luma * 0.5);
+            float grainStrength = uIntensity * (1.2 - luma * 0.6);
 
-            color.rgb += grain * grainStrength;
+            // Subtle color grain — each channel gets slightly different noise
+            float rGrain = grain + hash(vUv * 800.0 + uTime * 51.0) * 0.15;
+            float bGrain = grain + hash2(vUv * 900.0 + uTime * 73.0) * 0.15;
+
+            color.r += rGrain * grainStrength;
+            color.g += grain * grainStrength;
+            color.b += bGrain * grainStrength;
 
             gl_FragColor = color;
         }
@@ -467,10 +496,22 @@ skyDome.addToScene(scene); // Also sets scene.background = null
 // ============================================================
 setLoading(20, 'Igniting local star...');
 
-const sunLight = new THREE.DirectionalLight(sunColor, 2.5);
+// Main sun — directional with shadow casting
+const sunLight = new THREE.DirectionalLight(sunColor, 2.8);
 sunLight.position.set(100, 80, 60);
-// Shadows disabled for performance
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 0.5;
+sunLight.shadow.camera.far = 300;
+sunLight.shadow.camera.left = -80;
+sunLight.shadow.camera.right = 80;
+sunLight.shadow.camera.top = 80;
+sunLight.shadow.camera.bottom = -80;
+sunLight.shadow.bias = -0.0005;
+sunLight.shadow.normalBias = 0.02;
 scene.add(sunLight);
+scene.add(sunLight.target);
 
 // Ambient light intensity from mood (Delta worlds are dimmer, Beta worlds brighter)
 const ambientLight = new THREE.AmbientLight(skyBottomColor, planetMood.atmosphere.ambientLight);
@@ -478,8 +519,18 @@ scene.add(ambientLight);
 
 // Hemisphere light — sky color from above, warm earth tone from below
 // This makes shadows take on the sky tint (blue shadows on blue worlds, etc.)
-const hemiLight = new THREE.HemisphereLight(skyTopColor, 0x332211, 0.7);
+const hemiLight = new THREE.HemisphereLight(skyTopColor, 0x443322, 0.8);
 scene.add(hemiLight);
+
+// Fill light — warm bounce from below, prevents pitch-black undersides
+const fillLight = new THREE.DirectionalLight(0xffaa66, 0.35);
+fillLight.position.set(-30, -20, 20);
+scene.add(fillLight);
+
+// Rim light — subtle backlight that separates objects from background
+const rimLight = new THREE.DirectionalLight(skyTopColor, 0.25);
+rimLight.position.set(-50, 40, -80);
+scene.add(rimLight);
 
 // ============================================================
 // CAMERA
@@ -504,8 +555,8 @@ composer.addPass(ssaoPass);
 const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
     planetMood.atmosphere.bloomStrength,  // mood-driven bloom
-    0.8,   // radius (wide soft glow)
-    0.82   // threshold (only bright things bloom)
+    0.85,   // radius (wide soft glow — slightly larger for cinematic feel)
+    0.75    // threshold (slightly lower — catches more highlights for atmosphere)
 );
 composer.addPass(bloomPass);
 
@@ -1175,12 +1226,18 @@ function animate() {
             tablet.setCoordinates(camera.position.x, camera.position.y, camera.position.z);
         }
 
-        // Sun follows player for consistent lighting direction
+        // Sun follows player for consistent lighting + shadow coverage
         sunLight.position.set(
             camera.position.x + 100,
             80,
             camera.position.z + 60
         );
+        sunLight.target.position.set(
+            camera.position.x,
+            0,
+            camera.position.z
+        );
+        sunLight.target.updateMatrixWorld();
 
         // Check ship proximity (show "Press E" prompt)
         if (shipGrounded) {
@@ -1236,12 +1293,14 @@ function animate() {
         const flightInfo = flightController.getHUDInfo();
         hyperspaceSystem.update(dt, flightInfo.altitude);
 
-        // Sun follows ship
+        // Sun follows ship (shadow camera tracks too)
         sunLight.position.set(
             _shipWorldPos.x + 100,
             80,
             _shipWorldPos.z + 60
         );
+        sunLight.target.position.set(_shipWorldPos.x, 0, _shipWorldPos.z);
+        sunLight.target.updateMatrixWorld();
 
         // Ship HUD
         shipHUD.update(flightInfo, weaponSystem.getHUDInfo());

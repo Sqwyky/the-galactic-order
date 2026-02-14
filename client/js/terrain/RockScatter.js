@@ -257,8 +257,8 @@ export class RockScatter {
             this.rockGeo, this.material, rocks.length
         );
         instancedMesh.frustumCulled = true;
-        instancedMesh.castShadow = false;
-        instancedMesh.receiveShadow = false;
+        instancedMesh.castShadow = true;
+        instancedMesh.receiveShadow = true;
 
         // Per-instance colors for variation
         const colors = [];

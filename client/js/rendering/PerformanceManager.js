@@ -50,6 +50,8 @@ const TIER_SETTINGS = {
         floraMultiplier:      1.0,
         grassEnabled:         true,
         miningParticleCount:  40,
+        shadowsEnabled:       true,
+        shadowMapSize:        2048,
         postProcessing: {
             ssao:       true,
             bloom:      true,
@@ -69,6 +71,8 @@ const TIER_SETTINGS = {
         floraMultiplier:      0.85,
         grassEnabled:         true,
         miningParticleCount:  30,
+        shadowsEnabled:       true,
+        shadowMapSize:        1024,
         postProcessing: {
             ssao:       true,
             bloom:      true,
@@ -88,6 +92,8 @@ const TIER_SETTINGS = {
         floraMultiplier:      0.6,
         grassEnabled:         true,
         miningParticleCount:  25,
+        shadowsEnabled:       false,
+        shadowMapSize:        512,
         postProcessing: {
             ssao:       false,
             bloom:      true,       // Keep bloom — the painted sci-fi look
@@ -108,6 +114,8 @@ const TIER_SETTINGS = {
         grassEnabled:         true,    // Keep grass (sparse), preserves ground look
         grassMultiplier:      0.3,     // Very sparse grass
         miningParticleCount:  15,
+        shadowsEnabled:       false,
+        shadowMapSize:        512,
         postProcessing: {
             ssao:       false,
             bloom:      true,       // Keep bloom — even subtle bloom prevents flat look
@@ -127,6 +135,8 @@ const TIER_SETTINGS = {
         floraMultiplier:      0.25,
         grassEnabled:         false,   // Only grass is disabled on true potato
         miningParticleCount:  10,
+        shadowsEnabled:       false,
+        shadowMapSize:        512,
         postProcessing: {
             ssao:       false,
             bloom:      true,       // Bloom stays — threshold raised so only bright things glow
@@ -497,11 +507,16 @@ export class PerformanceManager {
      */
     _syncPasses() {
         const pp = this.settings.postProcessing;
+        const cfg = TIER_SETTINGS[this.currentTier];
+
+        // Shadows — toggle on renderer based on tier
+        if (this.renderer) {
+            this.renderer.shadowMap.enabled = cfg.shadowsEnabled;
+        }
 
         if (this._ssaoPass) {
             this._ssaoPass.enabled = pp.ssao;
             if (pp.ssao) {
-                const cfg = TIER_SETTINGS[this.currentTier];
                 this._ssaoPass.kernelRadius = cfg.ssaoKernelRadius;
             }
         }
@@ -513,7 +528,6 @@ export class PerformanceManager {
 
         if (this._filmGrainPass) {
             this._filmGrainPass.enabled = pp.filmGrain;
-            // Adjust grain intensity per tier (subtle on low-end, full on high-end)
             if (this._filmGrainPass.uniforms && this._filmGrainPass.uniforms.uIntensity) {
                 this._filmGrainPass.uniforms.uIntensity.value = this.settings.filmGrainIntensity;
             }
@@ -521,7 +535,6 @@ export class PerformanceManager {
 
         if (this._colorGradePass) {
             this._colorGradePass.enabled = pp.colorGrade;
-            // Adjust saturation per tier (higher on low-end to compensate for fewer layers)
             if (this._colorGradePass.uniforms && this._colorGradePass.uniforms.uSaturation) {
                 this._colorGradePass.uniforms.uSaturation.value = this.settings.saturationBoost;
             }
