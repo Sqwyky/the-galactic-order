@@ -510,7 +510,8 @@ const bloomPass = new UnrealBloomPass(
 composer.addPass(bloomPass);
 
 // Color grading — the "painted sci-fi" look
-composer.addPass(new ShaderPass(colorGradeShader));
+const colorGradePass = new ShaderPass(colorGradeShader);
+composer.addPass(colorGradePass);
 
 // Film grain — 70s sci-fi texture, stronger in dark areas
 composer.addPass(filmGrainPass);
@@ -638,8 +639,24 @@ const miningSystem = new MiningSystem(scene, camera, {
 // Link inventory to tablet
 tablet.setInventory(inventory);
 
-// Performance manager — adaptive quality for potato laptops
+// Performance manager — adaptive quality that looks good on ALL devices
 const perfManager = new PerformanceManager(renderer);
+
+// Wire perf manager to post-processing passes (so tier changes actually take effect)
+perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass);
+
+// Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
+perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
+
+// When quality tier changes, propagate to mining system
+perfManager.onQualityChanged((tierName, settings) => {
+    miningSystem.setQuality({
+        quality: tierName,
+        miningParticleCount: settings.miningParticleCount,
+        miningBeamParticles: true,     // Keep beam particles at all tiers
+        miningCrystalTrail: tierName !== 'POTATO',
+    });
+});
 
 // ============================================================
 // NPC MANAGER — The Mysterious Being
@@ -1252,7 +1269,7 @@ function animate() {
         const fps = Math.round(frameCount / (t - lastFpsTime));
         const stats = terrainManager.getStats();
         document.getElementById('perf').textContent =
-            `${fps} FPS · ${stats.activeChunks} chunks · ${renderer.info.render.triangles} tris`;
+            `${fps} FPS · ${perfManager.tierName} · ${stats.activeChunks} chunks · ${renderer.info.render.triangles} tris`;
         frameCount = 0;
         lastFpsTime = t;
     }

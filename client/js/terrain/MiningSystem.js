@@ -892,33 +892,41 @@ export class MiningSystem {
      * @param {string} [settings.quality] - 'POTATO' | 'LOW' | 'MEDIUM' | 'HIGH'
      */
     setQuality(settings) {
-        // settings from PerformanceManager
-        // Adjust particleCount, crystal trail, beam complexity based on quality
+        // Philosophy: reduce cost, not beauty — every tier keeps the visual feel
         this.config.particleCount = settings.miningParticleCount || 40;
         this.config.maxParticleSystems = settings.miningMaxParticleSystems || 3;
         this.config.maxCrystals = settings.miningMaxCrystals || 8;
 
-        // On POTATO: disable beam particles, reduce crystal effects
         if (settings.quality === 'POTATO') {
-            this.config.beamParticleCount = 0;
-            this.config.crystalTrailEnabled = false;
+            // POTATO: fewer particles but beam + crystals still look good
+            this.config.beamParticleCount = 2;          // Keep beam energy dots (cheap)
+            this.config.crystalTrailEnabled = false;     // Only trails disabled
+            this.config.crystalTrailCount = 0;
             this.config.particleCount = Math.min(this.config.particleCount, 15);
-            this.config.maxParticleSystems = 1;
+            this.config.maxParticleSystems = 2;
             this.config.maxCrystals = 4;
         } else if (settings.quality === 'LOW') {
-            this.config.beamParticleCount = 1;
-            this.config.crystalTrailEnabled = false;
-            this.config.particleCount = Math.min(this.config.particleCount, 25);
+            // LOW: slightly reduced but all effects present
+            this.config.beamParticleCount = 2;
+            this.config.crystalTrailEnabled = true;
+            this.config.crystalTrailCount = 3;           // Shorter trail
+            this.config.particleCount = Math.min(this.config.particleCount, 20);
             this.config.maxParticleSystems = 2;
             this.config.maxCrystals = 6;
+        } else if (settings.quality === 'MEDIUM') {
+            // MEDIUM: near-full effects
+            this.config.beamParticleCount = 3;
+            this.config.crystalTrailEnabled = true;
+            this.config.crystalTrailCount = 4;
+            this.config.maxParticleSystems = 3;
+            this.config.maxCrystals = 6;
         } else {
-            // MEDIUM / HIGH — full effects
-            if (settings.miningBeamParticles !== undefined) {
-                this.config.beamParticleCount = settings.miningBeamParticles ? 3 : 0;
-            }
-            if (settings.miningCrystalTrail !== undefined) {
-                this.config.crystalTrailEnabled = settings.miningCrystalTrail;
-            }
+            // HIGH / ULTRA — full effects
+            this.config.beamParticleCount = 3;
+            this.config.crystalTrailEnabled = true;
+            this.config.crystalTrailCount = 6;
+            this.config.maxParticleSystems = 3;
+            this.config.maxCrystals = 8;
         }
 
         // Rebuild beam particles pool with new count

@@ -58,6 +58,8 @@ const TIER_SETTINGS = {
         },
         bloomStrengthMultiplier: 1.0,
         ssaoKernelRadius:        12,
+        filmGrainIntensity:      0.025,
+        saturationBoost:         1.3,
     },
 
     // ---- HIGH: slight SSAO reduction, fewer particles ----
@@ -75,9 +77,11 @@ const TIER_SETTINGS = {
         },
         bloomStrengthMultiplier: 1.0,
         ssaoKernelRadius:        8,
+        filmGrainIntensity:      0.025,
+        saturationBoost:         1.3,
     },
 
-    // ---- MEDIUM: no SSAO, reduced bloom, halved particles ----
+    // ---- MEDIUM: no SSAO, bloom + grain preserved, halved particles ----
     [QUALITY_TIERS.MEDIUM]: {
         particleMultiplier:   0.5,
         drawDistance:          4,
@@ -86,46 +90,53 @@ const TIER_SETTINGS = {
         miningParticleCount:  25,
         postProcessing: {
             ssao:       false,
-            bloom:      true,
-            filmGrain:  true,
+            bloom:      true,       // Keep bloom — the painted sci-fi look
+            filmGrain:  true,       // Keep grain — cheap, adds texture
             colorGrade: true,
         },
         bloomStrengthMultiplier: 0.7,
         ssaoKernelRadius:        8,
+        filmGrainIntensity:      0.02,
+        saturationBoost:         1.35,  // Slightly higher to compensate for no SSAO depth
     },
 
-    // ---- LOW: no SSAO or film grain, minimal bloom, quarter particles ----
+    // ---- LOW: no SSAO, reduced bloom + grain, sparse grass ----
     [QUALITY_TIERS.LOW]: {
         particleMultiplier:   0.35,
         drawDistance:          3,
         floraMultiplier:      0.4,
-        grassEnabled:         false,
+        grassEnabled:         true,    // Keep grass (sparse), preserves ground look
+        grassMultiplier:      0.3,     // Very sparse grass
         miningParticleCount:  15,
         postProcessing: {
             ssao:       false,
-            bloom:      true,
-            filmGrain:  false,
+            bloom:      true,       // Keep bloom — even subtle bloom prevents flat look
+            filmGrain:  true,       // Keep grain — nearly free on GPU
             colorGrade: true,
         },
-        bloomStrengthMultiplier: 0.4,
+        bloomStrengthMultiplier: 0.5,
         ssaoKernelRadius:        4,
+        filmGrainIntensity:      0.015,
+        saturationBoost:         1.4,   // Higher saturation compensates for fewer visual layers
     },
 
-    // ---- POTATO: strip everything, just color grade, aggressive LOD ----
+    // ---- POTATO: everything stays ON but at minimum — looks good, runs fast ----
     [QUALITY_TIERS.POTATO]: {
         particleMultiplier:   0.25,
         drawDistance:          2,
-        floraMultiplier:      0.3,
-        grassEnabled:         false,
+        floraMultiplier:      0.25,
+        grassEnabled:         false,   // Only grass is disabled on true potato
         miningParticleCount:  10,
         postProcessing: {
             ssao:       false,
-            bloom:      false,
-            filmGrain:  false,
-            colorGrade: true,
+            bloom:      true,       // Bloom stays — threshold raised so only bright things glow
+            filmGrain:  true,       // Grain stays — it's a single texture sample, nearly free
+            colorGrade: true,       // Color grade stays — always
         },
-        bloomStrengthMultiplier: 0.0,
+        bloomStrengthMultiplier: 0.35,
         ssaoKernelRadius:        4,
+        filmGrainIntensity:      0.012, // Subtle but present
+        saturationBoost:         1.45,  // Extra pop to compensate for less geometry detail
     },
 };
 
@@ -182,6 +193,9 @@ export class PerformanceManager {
         // ---- Bloom base strength (set externally from planet mood) ----
         this._bloomBaseStrength = 1.0;
 
+        // ---- Quality change callbacks ----
+        this._onQualityChanged = [];
+
         // ---- Composer references (set via applyToComposer) ----
         this._composer       = null;
         this._ssaoPass       = null;
@@ -203,6 +217,7 @@ export class PerformanceManager {
             drawDistance:          6,
             floraMultiplier:      1.0,
             grassEnabled:         true,
+            grassMultiplier:      1.0,
             miningParticleCount:  40,
             postProcessing: {
                 ssao:       true,
@@ -211,6 +226,8 @@ export class PerformanceManager {
                 colorGrade: true,
             },
             bloomStrength:        1.0,  // final bloom strength (base * multiplier)
+            filmGrainIntensity:   0.025,
+            saturationBoost:      1.3,
         };
 
         // Detect hardware and set the initial tier
@@ -402,6 +419,7 @@ export class PerformanceManager {
         this.settings.drawDistance        = cfg.drawDistance;
         this.settings.floraMultiplier     = cfg.floraMultiplier;
         this.settings.grassEnabled        = cfg.grassEnabled;
+        this.settings.grassMultiplier     = cfg.grassMultiplier || 1.0;
         this.settings.miningParticleCount = cfg.miningParticleCount;
 
         this.settings.postProcessing.ssao       = cfg.postProcessing.ssao;
@@ -412,8 +430,18 @@ export class PerformanceManager {
         // Bloom strength = mood-driven base * tier multiplier
         this.settings.bloomStrength = this._bloomBaseStrength * cfg.bloomStrengthMultiplier;
 
+        // Film grain & saturation (preserved across all tiers for visual parity)
+        this.settings.filmGrainIntensity = cfg.filmGrainIntensity;
+        this.settings.saturationBoost    = cfg.saturationBoost;
+
         // ---- Apply to composer passes if they've been registered ----
         this._syncPasses();
+
+        // ---- Notify listeners (MiningSystem, etc.) ----
+        const tierName = TIER_NAMES[tier];
+        for (const cb of this._onQualityChanged) {
+            cb(tierName, this.settings);
+        }
     }
 
     // ================================================================
@@ -485,10 +513,18 @@ export class PerformanceManager {
 
         if (this._filmGrainPass) {
             this._filmGrainPass.enabled = pp.filmGrain;
+            // Adjust grain intensity per tier (subtle on low-end, full on high-end)
+            if (this._filmGrainPass.uniforms && this._filmGrainPass.uniforms.uIntensity) {
+                this._filmGrainPass.uniforms.uIntensity.value = this.settings.filmGrainIntensity;
+            }
         }
 
         if (this._colorGradePass) {
             this._colorGradePass.enabled = pp.colorGrade;
+            // Adjust saturation per tier (higher on low-end to compensate for fewer layers)
+            if (this._colorGradePass.uniforms && this._colorGradePass.uniforms.uSaturation) {
+                this._colorGradePass.uniforms.uSaturation.value = this.settings.saturationBoost;
+            }
         }
     }
 
@@ -533,6 +569,17 @@ export class PerformanceManager {
         this._highFpsTimer      = 0;
         this._tierChangeCooldown = TIER_CHANGE_COOLDOWN;
         console.log('[TGO PerfManager] Auto-adjust re-enabled');
+    }
+
+    /**
+     * Register a callback for quality tier changes.
+     * Called with (tierName: string, settings: Object) whenever the tier changes.
+     * Use this to propagate quality settings to other systems (MiningSystem, etc.).
+     *
+     * @param {Function} callback - (tierName, settings) => void
+     */
+    onQualityChanged(callback) {
+        this._onQualityChanged.push(callback);
     }
 
     /**
