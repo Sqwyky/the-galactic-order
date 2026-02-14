@@ -62,7 +62,7 @@ const server = createServer(async (req, res) => {
     }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 The Galactic Order server running at http://localhost:${PORT}`);
     console.log(`   Landing page: http://localhost:${PORT}/landing.html`);
 });
