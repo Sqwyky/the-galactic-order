@@ -266,6 +266,9 @@ import { MiningHUD } from './js/ui/MiningHUD.js';
 import { ELEMENTS } from './js/generation/HarmonicElements.js';
 import { PerformanceManager } from './js/rendering/PerformanceManager.js';
 
+// Creature system
+import { CreatureSystem } from './js/creatures/CreatureSystem.js';
+
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -273,6 +276,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { RayMarchedAtmospherePass } from './js/rendering/RayMarchedAtmosphere.js';
 
 // ============================================================
 // URL PARAMS — planet identity
@@ -321,7 +325,24 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // ============================================================
 // POST-PROCESSING — the NMS "cinematic painted sci-fi" look
 // ============================================================
-const composer = new EffectComposer(renderer);
+// Create render target with depth texture for ray-marched atmosphere
+const composerRT = new THREE.WebGLRenderTarget(
+    window.innerWidth * Math.min(window.devicePixelRatio, 2),
+    window.innerHeight * Math.min(window.devicePixelRatio, 2),
+    {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+        type: THREE.HalfFloatType,
+        depthTexture: new THREE.DepthTexture(
+            window.innerWidth * Math.min(window.devicePixelRatio, 2),
+            window.innerHeight * Math.min(window.devicePixelRatio, 2)
+        ),
+    }
+);
+composerRT.depthTexture.format = THREE.DepthFormat;
+composerRT.depthTexture.type = THREE.UnsignedIntType;
+const composer = new EffectComposer(renderer, composerRT);
 
 // Color Grading shader — cinematic NMS look: S-curve contrast, split toning,
 // chromatic aberration, vignette, subtle warm/cool shift
@@ -551,6 +572,20 @@ ssaoPass.maxDistance = 0.15;
 ssaoPass.output = SSAOPass.OUTPUT.Default; // Blended with scene
 composer.addPass(ssaoPass);
 
+// Ray-marched atmosphere — volumetric scattering, aerial perspective, god rays
+const atmospherePass = new RayMarchedAtmospherePass(camera, {
+    skyColor: skyTopColor,
+    fogColor: fogColor,
+    sunColor: sunColor,
+    sunDirection: new THREE.Vector3(0.5, 0.3, 0.4).normalize(),
+    fogDensity: moodFogDensity,
+    scatterStrength: planetMood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
+    godRayStrength: 0.25,
+    aerialPerspective: 0.8,
+    heightFalloff: 0.08,
+});
+composer.addPass(atmospherePass);
+
 // Bloom — strength driven by planet mood (dreamlike Delta = more bloom, calm Alpha = less)
 const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -718,6 +753,16 @@ let npcManager = new NPCManager(scene, {
 }, (x, z) => terrainManager.getHeightAt(x, z));
 
 // ============================================================
+// CREATURE SYSTEM — Procedural alien life forms
+// ============================================================
+let creatureSystem = new CreatureSystem(scene, {
+    planetRule: planetRule,
+    planetSeed: planetSeed,
+    getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
+    getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+});
+
+// ============================================================
 // SHIP + FLIGHT SYSTEMS
 // ============================================================
 
@@ -798,6 +843,7 @@ function transitionToPlanet(newRule, newSeed) {
     alienFlora.dispose();
     atmosphericParticles.dispose();
     npcManager.dispose();
+    creatureSystem.dispose();
 
     // ---- Update planet identity ----
     planetRule = newRule;
@@ -842,6 +888,15 @@ function transitionToPlanet(newRule, newSeed) {
 
     // ---- Update bloom strength for new planet mood ----
     perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
+
+    // ---- Update ray-marched atmosphere for new planet ----
+    atmospherePass.setAtmosphere({
+        skyColor: skyTopColor,
+        fogColor: fogColor,
+        sunColor: sunColor,
+        fogDensity: moodFogDensity,
+        scatterStrength: planetMood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
+    });
 
     // ---- Recreate terrain (new CA rule + seed = new world) ----
     terrainManager = new TerrainManager(scene, {
@@ -888,6 +943,14 @@ function transitionToPlanet(newRule, newSeed) {
         seed: planetSeed,
         rule: planetRule,
     }, (x, z) => terrainManager.getHeightAt(x, z));
+
+    // ---- Recreate creature system ----
+    creatureSystem = new CreatureSystem(scene, {
+        planetRule: planetRule,
+        planetSeed: planetSeed,
+        getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
+        getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+    });
 
     // ---- Reset encounter state ----
     encounterState = 'waiting';
@@ -1213,7 +1276,7 @@ function updateDescent(dt) {
         `${Math.round(height)}m`;
 
     // Update terrain around descent path
-    terrainManager.update(camera.position);
+    terrainManager.update(camera.position, camera, dt);
     // Sky dome follows camera during descent too
     skyDome.update(camera.position, descentProgress * descentDuration);
     // Water waves animate during descent
@@ -1296,6 +1359,10 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    // Update depth render target size
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    composerRT.setSize(window.innerWidth * dpr, window.innerHeight * dpr);
+    atmospherePass.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ============================================================
@@ -1325,7 +1392,7 @@ function animate() {
         if (!dialogue.isDialogueActive() && !tablet.isOpen) {
             walker.update(dt);
         }
-        terrainManager.update(camera.position);
+        terrainManager.update(camera.position, camera, dt);
 
         // Sky dome follows camera
         skyDome.update(camera.position, t);
@@ -1372,6 +1439,9 @@ function animate() {
 
         // Update NPCs
         npcManager.update(dt, camera.position);
+
+        // Update alien creatures
+        creatureSystem.update(dt, camera.position);
 
         // Check Mysterious Being proximity
         if (npcManager.mysteriousBeing && encounterState !== 'talking') {
@@ -1431,7 +1501,7 @@ function animate() {
         flightController.getWorldPosition(_shipWorldPos);
 
         // Terrain keeps generating around ship
-        terrainManager.update(_shipWorldPos);
+        terrainManager.update(_shipWorldPos, camera, dt);
 
         // Sky dome follows ship
         skyDome.update(_shipWorldPos, t);
@@ -1496,7 +1566,7 @@ function animate() {
         const fps = Math.round(frameCount / (t - lastFpsTime));
         const stats = terrainManager.getStats();
         document.getElementById('perf').textContent =
-            `${fps} FPS · ${perfManager.tierName} · ${stats.activeChunks} chunks · ${renderer.info.render.triangles} tris`;
+            `${fps} FPS · ${perfManager.tierName} · ${stats.activeChunks} chunks (${stats.culledChunks || 0} culled) · LOD ${stats.lodBias?.toFixed(1) || '1.0'} · ${renderer.info.render.triangles} tris`;
         frameCount = 0;
         lastFpsTime = t;
     }

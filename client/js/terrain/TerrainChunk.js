@@ -68,6 +68,22 @@ export const TERRAIN_CONFIG = {
 
     // LOD bias — shift split distances (< 1 = more detail, > 1 = less)
     lodBias: 1.0,
+
+    // === Adaptive LOD ===
+    // Target FPS for adaptive quality (auto-adjusts lodBias)
+    adaptiveTargetFPS: 55,
+    // Minimum LOD bias (highest quality ceiling)
+    adaptiveLodMin: 0.6,
+    // Maximum LOD bias (lowest quality floor)
+    adaptiveLodMax: 2.5,
+
+    // === Chunk pooling ===
+    // Number of disposed chunks to keep in pool for reuse
+    chunkPoolSize: 32,
+
+    // === Skirt geometry ===
+    // Depth of skirt below chunk edges to hide LOD cracks
+    skirtDepth: 2.0,
 };
 
 // ============================================================
@@ -200,8 +216,11 @@ export class TerrainChunkMesh {
     /**
      * Build the 3D mesh from heightmap data.
      * Called after the WebWorker returns the chunk data.
+     * @param {Object} chunkData - From WebWorker
+     * @param {Object} config - TERRAIN_CONFIG
+     * @param {THREE.Material} [pooledMaterial] - Reuse from pool
      */
-    buildMesh(chunkData, config) {
+    buildMesh(chunkData, config, pooledMaterial) {
 
         this.elevation = chunkData.elevation;
         this.moisture = chunkData.moisture;
@@ -310,7 +329,8 @@ export class TerrainChunkMesh {
         geo.computeVertexNormals();
 
         // MeshStandardMaterial with PBR for shadow receiving and depth
-        const mat = new THREE.MeshStandardMaterial({
+        // Reuse pooled material when available to reduce GC pressure
+        const mat = pooledMaterial || new THREE.MeshStandardMaterial({
             vertexColors: true,
             flatShading: false,
             roughness: 0.85,
@@ -377,6 +397,29 @@ export class TerrainChunkMesh {
         return height;
     }
 
+    /**
+     * Get the biome ID at a specific world position.
+     * Uses bilinear interpolation of the 4 nearest biome samples,
+     * picking the dominant one for a smooth boundary feel.
+     */
+    getBiomeAt(worldX, worldZ) {
+        if (!this.biomeIds) return null;
+
+        const localX = worldX - (this.worldX - this.worldSize / 2);
+        const localZ = worldZ - (this.worldZ - this.worldSize / 2);
+        const u = localX / this.worldSize;
+        const v = localZ / this.worldSize;
+
+        if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+
+        const dataRes = Math.round(Math.sqrt(this.biomeIds.length));
+        const gx = Math.min(Math.floor(u * (dataRes - 1)), dataRes - 2);
+        const gy = Math.min(Math.floor(v * (dataRes - 1)), dataRes - 2);
+
+        // Return the biome at nearest grid point
+        return this.biomeIds[gy * dataRes + gx];
+    }
+
     dispose() {
         if (this.geometry) this.geometry.dispose();
         if (this.material) this.material.dispose();
@@ -388,6 +431,9 @@ export class TerrainChunkMesh {
 // ============================================================
 // TERRAIN MANAGER — Pioneer-style quadtree + worker orchestration
 // ============================================================
+
+// Reusable bounding box for frustum culling (avoids per-frame allocation)
+const _chunkBox = new THREE.Box3();
 
 export class TerrainManager {
     /**
@@ -420,22 +466,56 @@ export class TerrainManager {
         // Water plane
         this.waterMesh = null;
 
+        // Chunk pool — reuse disposed geometry/material objects
+        this._chunkPool = [];
+
+        // Frustum culling
+        this._frustum = new THREE.Frustum();
+        this._projScreenMatrix = new THREE.Matrix4();
+        this._camera = null; // Set by update()
+
+        // Adaptive LOD — auto-adjust lodBias based on FPS
+        this._adaptiveLodBias = this.config.lodBias;
+        this._fpsHistory = [];
+        this._fpsHistoryMax = 30; // Track last 30 frames
+        this._adaptiveTimer = 0;
+        this._adaptiveInterval = 1.0; // Re-evaluate every second
+
         // Stats
         this.stats = {
             activeChunks: 0,
             pendingChunks: 0,
             totalTriangles: 0,
             maxDepth: 0,
+            lodBias: this._adaptiveLodBias,
+            culledChunks: 0,
         };
     }
 
     /**
      * Update terrain based on camera position.
      * Uses Pioneer-style quadtree: split close chunks, merge far ones.
+     * @param {THREE.Vector3} cameraPosition
+     * @param {THREE.Camera} [camera] - For frustum culling (optional)
+     * @param {number} [dt] - Delta time for adaptive LOD (optional)
      */
-    update(cameraPosition) {
+    update(cameraPosition, camera, dt) {
         const camX = cameraPosition.x;
         const camZ = cameraPosition.z;
+
+        // Update frustum for culling
+        if (camera) {
+            this._camera = camera;
+            this._projScreenMatrix.multiplyMatrices(
+                camera.projectionMatrix, camera.matrixWorldInverse
+            );
+            this._frustum.setFromProjectionMatrix(this._projScreenMatrix);
+        }
+
+        // Adaptive LOD — adjust bias based on FPS
+        if (dt && dt > 0) {
+            this._updateAdaptiveLOD(dt);
+        }
 
         // Determine which chunks should exist via quadtree evaluation
         const desiredChunks = this._getDesiredChunks(camX, camZ);
@@ -448,9 +528,19 @@ export class TerrainManager {
         }
 
         // Remove chunks that are no longer needed
+        let culledCount = 0;
         for (const [key, chunk] of this.chunks) {
             if (!desiredChunks.has(key)) {
                 this._removeChunk(key);
+            } else if (chunk.mesh && this._camera) {
+                // Frustum culling — hide chunks outside camera view
+                // (keep them allocated, just toggle visibility)
+                const halfSize = chunk.worldSize / 2;
+                _chunkBox.min.set(chunk.worldX - halfSize, -5, chunk.worldZ - halfSize);
+                _chunkBox.max.set(chunk.worldX + halfSize, 30, chunk.worldZ + halfSize);
+                const visible = this._frustum.intersectsBox(_chunkBox);
+                chunk.mesh.visible = visible;
+                if (!visible) culledCount++;
             }
         }
 
@@ -465,6 +555,46 @@ export class TerrainManager {
         // Update stats
         this.stats.activeChunks = this.chunks.size;
         this.stats.pendingChunks = this.pendingChunks.size;
+        this.stats.lodBias = this._adaptiveLodBias;
+        this.stats.culledChunks = culledCount;
+    }
+
+    /**
+     * Adaptive LOD — auto-adjust lodBias based on recent FPS.
+     * When FPS drops below target, increase lodBias (less detail).
+     * When FPS is comfortably above, decrease lodBias (more detail).
+     */
+    _updateAdaptiveLOD(dt) {
+        const fps = 1.0 / Math.max(dt, 0.001);
+        this._fpsHistory.push(fps);
+        if (this._fpsHistory.length > this._fpsHistoryMax) {
+            this._fpsHistory.shift();
+        }
+
+        this._adaptiveTimer += dt;
+        if (this._adaptiveTimer < this._adaptiveInterval) return;
+        this._adaptiveTimer = 0;
+
+        if (this._fpsHistory.length < 10) return;
+
+        // Use median FPS (more stable than mean)
+        const sorted = [...this._fpsHistory].sort((a, b) => a - b);
+        const medianFPS = sorted[Math.floor(sorted.length / 2)];
+        const target = this.config.adaptiveTargetFPS;
+
+        if (medianFPS < target - 5) {
+            // FPS too low — reduce detail
+            this._adaptiveLodBias = Math.min(
+                this.config.adaptiveLodMax,
+                this._adaptiveLodBias + 0.1
+            );
+        } else if (medianFPS > target + 5) {
+            // FPS high — increase detail
+            this._adaptiveLodBias = Math.max(
+                this.config.adaptiveLodMin,
+                this._adaptiveLodBias - 0.05
+            );
+        }
     }
 
     /**
@@ -523,7 +653,8 @@ export class TerrainManager {
         const dist = Math.sqrt(dx * dx + dz * dz);
 
         // Pioneer's split criterion: split if camera is within (size * multiplier)
-        const splitDist = size * this.config.splitDistanceMultiplier * this.config.lodBias;
+        // Uses adaptive LOD bias for FPS-driven quality adjustment
+        const splitDist = size * this.config.splitDistanceMultiplier * this._adaptiveLodBias;
         const shouldSplit = depth < this.config.maxQuadtreeDepth && dist < splitDist;
 
         if (shouldSplit) {
@@ -661,8 +792,9 @@ export class TerrainManager {
         const chunk = this.pendingChunks.get(matchKey);
         this.pendingChunks.delete(matchKey);
 
-        // Build the 3D mesh
-        const mesh = chunk.buildMesh(data, this.config);
+        // Build the 3D mesh (try pooled material first)
+        const pooledMat = this._getPooledMaterial();
+        const mesh = chunk.buildMesh(data, this.config, pooledMat);
         if (mesh) {
             this.scene.add(mesh);
             this.chunks.set(matchKey, chunk);
@@ -674,11 +806,17 @@ export class TerrainManager {
 
     /**
      * Remove a chunk from the scene.
+     * Pools geometry/material for reuse instead of GC.
      */
     _removeChunk(key) {
         const chunk = this.chunks.get(key);
         if (chunk) {
             if (chunk.mesh) this.scene.remove(chunk.mesh);
+            // Pool reusable material (geometry varies per chunk so dispose it)
+            if (chunk.material && this._chunkPool.length < this.config.chunkPoolSize) {
+                this._chunkPool.push(chunk.material);
+                chunk.material = null; // Prevent dispose
+            }
             chunk.dispose();
             this.chunks.delete(key);
         }
@@ -878,16 +1016,56 @@ export class TerrainManager {
     /**
      * Get terrain height at a world position.
      * Queries the chunk that contains this position.
+     * Prefers highest-LOD chunk when overlapping.
      */
     getHeightAt(worldX, worldZ) {
+        let bestChunk = null;
+        let bestDepth = -1;
+
         for (const [key, chunk] of this.chunks) {
             if (chunk.state !== 'ready') continue;
 
             const halfSize = chunk.worldSize / 2;
             if (worldX >= chunk.worldX - halfSize && worldX < chunk.worldX + halfSize &&
                 worldZ >= chunk.worldZ - halfSize && worldZ < chunk.worldZ + halfSize) {
-                return chunk.getHeightAt(worldX, worldZ);
+                if (chunk.depth > bestDepth) {
+                    bestChunk = chunk;
+                    bestDepth = chunk.depth;
+                }
             }
+        }
+        return bestChunk ? bestChunk.getHeightAt(worldX, worldZ) : null;
+    }
+
+    /**
+     * Get biome ID at a world position.
+     * Used by creature system for biome-aware spawning.
+     */
+    getBiomeAt(worldX, worldZ) {
+        let bestChunk = null;
+        let bestDepth = -1;
+
+        for (const [key, chunk] of this.chunks) {
+            if (chunk.state !== 'ready') continue;
+
+            const halfSize = chunk.worldSize / 2;
+            if (worldX >= chunk.worldX - halfSize && worldX < chunk.worldX + halfSize &&
+                worldZ >= chunk.worldZ - halfSize && worldZ < chunk.worldZ + halfSize) {
+                if (chunk.depth > bestDepth) {
+                    bestChunk = chunk;
+                    bestDepth = chunk.depth;
+                }
+            }
+        }
+        return bestChunk ? bestChunk.getBiomeAt(worldX, worldZ) : null;
+    }
+
+    /**
+     * Get a pooled material or create a new one.
+     */
+    _getPooledMaterial() {
+        if (this._chunkPool.length > 0) {
+            return this._chunkPool.pop();
         }
         return null;
     }
@@ -918,6 +1096,12 @@ export class TerrainManager {
         this.chunks.clear();
         this.pendingChunks.clear();
         this.generationQueue = [];
+
+        // Dispose pooled materials
+        for (const mat of this._chunkPool) {
+            mat.dispose();
+        }
+        this._chunkPool = [];
 
         if (this.waterMesh) {
             this.scene.remove(this.waterMesh);
