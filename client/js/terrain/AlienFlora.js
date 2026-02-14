@@ -103,11 +103,12 @@ export class AlienFloraSystem {
             const variant = shapeVariants[v];
             const colors = deriveShapeColors(planetRule, hashSeed(floraSeed, 'color', v));
 
-            // Generate the supershape geometry
+            // Generate the supershape geometry with modifiers
             let geo;
             try {
+                const modifiers = variant.modifiers || {};
                 geo = createSupershapeGeometry(
-                    variant.params1, variant.params2, this.config.shapeResolution
+                    variant.params1, variant.params2, this.config.shapeResolution, modifiers
                 );
                 normalizeGeometry(geo); // Fit to 1×1×1 bounding box
             } catch (e) {
@@ -131,11 +132,19 @@ export class AlienFloraSystem {
                 ? new THREE.Color(colors.emissive[0], colors.emissive[1], colors.emissive[2])
                 : new THREE.Color(0, 0, 0);
 
+            // Accent color for variation
+            const accentColor = colors.accent
+                ? new THREE.Color(colors.accent[0], colors.accent[1], colors.accent[2])
+                : baseColor.clone().multiplyScalar(0.8);
+
             const mat = new THREE.ShaderMaterial({
                 uniforms: {
                     uColor: { value: baseColor },
+                    uAccentColor: { value: accentColor },
                     uEmissive: { value: emissiveColor },
                     uEmissiveIntensity: { value: hasGlow ? 0.4 : 0.0 },
+                    uRoughness: { value: colors.roughness },
+                    uMetalness: { value: colors.metalness },
                     uTime: { value: 0.0 },
                     uWindStrength: { value: windStrength },
                     uOpacity: { value: colors.opacity },
@@ -144,60 +153,97 @@ export class AlienFloraSystem {
                     uniform float uTime;
                     uniform float uWindStrength;
 
+                    attribute vec3 color;
+
                     varying vec3 vNormal;
                     varying vec3 vWorldPosition;
+                    varying vec3 vViewDir;
+                    varying vec3 vVertexColor;
+                    varying float vHeightFactor;
 
                     void main() {
                         vec3 pos = position;
 
                         // Wind sway — stronger at top of plant (higher Y)
-                        // instanceMatrix already includes world position, so
-                        // use local Y as height factor
-                        float heightFactor = max(0.0, pos.y + 0.5); // 0 at base, 1 at top
-                        heightFactor = heightFactor * heightFactor; // Quadratic — tip moves most
+                        float heightFactor = max(0.0, pos.y + 0.5);
+                        heightFactor = heightFactor * heightFactor;
+                        vHeightFactor = heightFactor;
 
-                        // Multi-frequency wind
-                        // Use instance position (from instanceMatrix) to offset phase
+                        // Multi-frequency wind with instance-based phase
                         vec4 worldPos4 = instanceMatrix * vec4(pos, 1.0);
                         float phase = worldPos4.x * 0.1 + worldPos4.z * 0.13;
 
                         float wind1 = sin(uTime * 1.2 + phase) * 0.7;
                         float wind2 = sin(uTime * 2.5 + phase * 1.5) * 0.3;
-                        float gust = sin(uTime * 0.4 + phase * 0.3) * sin(uTime * 0.4 + phase * 0.3); // Gusts
+                        float gust = sin(uTime * 0.4 + phase * 0.3);
+                        gust *= gust;
 
                         float windOffset = (wind1 + wind2) * uWindStrength * heightFactor * (0.6 + gust * 0.4);
 
                         pos.x += windOffset;
-                        pos.z += windOffset * 0.5; // Less sway in Z
+                        pos.z += windOffset * 0.5;
 
                         // Apply instance transform
                         vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(pos, 1.0);
                         vWorldPosition = (modelMatrix * instanceMatrix * vec4(pos, 1.0)).xyz;
                         vNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);
+                        vViewDir = normalize(cameraPosition - vWorldPosition);
+                        vVertexColor = color;
 
                         gl_Position = projectionMatrix * mvPosition;
                     }
                 `,
                 fragmentShader: /* glsl */ `
                     uniform vec3 uColor;
+                    uniform vec3 uAccentColor;
                     uniform vec3 uEmissive;
                     uniform float uEmissiveIntensity;
+                    uniform float uRoughness;
+                    uniform float uMetalness;
                     uniform float uOpacity;
 
                     varying vec3 vNormal;
                     varying vec3 vWorldPosition;
+                    varying vec3 vViewDir;
+                    varying vec3 vVertexColor;
+                    varying float vHeightFactor;
 
                     void main() {
-                        // Simple directional light (matching scene sun)
+                        vec3 N = normalize(vNormal);
+                        vec3 V = normalize(vViewDir);
                         vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
-                        float NdotL = max(dot(normalize(vNormal), lightDir), 0.0);
+
+                        // Blend base color with accent using vertex color variation
+                        vec3 baseCol = mix(uColor, uAccentColor, vVertexColor.g * 0.4 + vHeightFactor * 0.2);
+
+                        // Diffuse (wrapped for softer look — half-Lambert)
+                        float NdotL = dot(N, lightDir);
+                        float halfLambert = NdotL * 0.5 + 0.5;
+                        halfLambert *= halfLambert; // Square for gentle falloff
 
                         // Hemisphere ambient (sky above, ground below)
-                        float upFactor = dot(normalize(vNormal), vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
-                        vec3 ambient = mix(vec3(0.08, 0.06, 0.04), vec3(0.15, 0.18, 0.25), upFactor);
+                        float upFactor = dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
+                        vec3 ambient = mix(vec3(0.08, 0.06, 0.04), vec3(0.15, 0.2, 0.28), upFactor);
 
-                        vec3 diffuse = uColor * (NdotL * 0.6 + 0.4);
-                        vec3 color = diffuse + ambient * uColor;
+                        vec3 diffuse = baseCol * halfLambert * 0.7;
+
+                        // Subsurface scattering hint — light shining through thin surfaces
+                        float sss = pow(max(dot(V, -lightDir), 0.0), 3.0);
+                        sss *= (1.0 - uMetalness) * 0.25;
+                        vec3 sssColor = baseCol * vec3(1.2, 1.0, 0.8) * sss;
+
+                        // Specular (Blinn-Phong) — sharper for metallic, broader for rough
+                        vec3 H = normalize(lightDir + V);
+                        float specPower = mix(16.0, 128.0, 1.0 - uRoughness);
+                        float spec = pow(max(dot(N, H), 0.0), specPower);
+                        float specIntensity = mix(0.15, 0.6, uMetalness);
+                        vec3 specColor = mix(vec3(0.9, 0.92, 1.0), baseCol, uMetalness) * spec * specIntensity;
+
+                        // Fresnel rim — edge glow for alien feel
+                        float fresnel = pow(1.0 - max(dot(V, N), 0.0), 4.0);
+                        vec3 rimColor = mix(vec3(0.1, 0.15, 0.25), uAccentColor, 0.3) * fresnel * 0.3;
+
+                        vec3 color = diffuse + ambient * baseCol * 0.3 + sssColor + specColor + rimColor;
 
                         // Emissive glow
                         color += uEmissive * uEmissiveIntensity;

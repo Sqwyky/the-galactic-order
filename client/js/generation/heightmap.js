@@ -168,11 +168,75 @@ export function multiOctaveSmooth(densityGrid, width, height, options = {}) {
 // MAIN API: Generate a heightmap from a CA rule
 // ============================================================
 
+// ============================================================
+// PROCEDURAL MICRO-DETAIL NOISE
+// ============================================================
+
+/**
+ * Simple hash for deterministic noise.
+ */
+function _heightHash(x, y) {
+    let h = x * 127.1 + y * 311.7;
+    h = Math.sin(h) * 43758.5453123;
+    return h - Math.floor(h);
+}
+
+/**
+ * 2D value noise with smooth interpolation.
+ */
+function _valueNoise2D(x, y) {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    const fx = x - ix, fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uy = fy * fy * (3 - 2 * fy);
+
+    const n00 = _heightHash(ix, iy);
+    const n10 = _heightHash(ix + 1, iy);
+    const n01 = _heightHash(ix, iy + 1);
+    const n11 = _heightHash(ix + 1, iy + 1);
+
+    const nx0 = n00 + (n10 - n00) * ux;
+    const nx1 = n01 + (n11 - n01) * ux;
+    return nx0 + (nx1 - nx0) * uy;
+}
+
+/**
+ * FBM (Fractal Brownian Motion) noise for terrain micro-detail.
+ * Adds natural-looking variation that the CA grid can't produce.
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} y - World Y coordinate
+ * @param {number} octaves - Number of noise octaves (3-6)
+ * @param {number} lacunarity - Frequency multiplier per octave
+ * @param {number} persistence - Amplitude multiplier per octave
+ * @param {number} seedOffset - Seed offset for variation per planet
+ * @returns {number} Noise value roughly in [-0.5, 0.5]
+ */
+function fbmNoise2D(x, y, octaves = 4, lacunarity = 2.13, persistence = 0.45, seedOffset = 0) {
+    let value = 0, amplitude = 0.5, frequency = 1.0;
+    for (let i = 0; i < octaves; i++) {
+        value += amplitude * (_valueNoise2D(
+            x * frequency + seedOffset + i * 17.3,
+            y * frequency + seedOffset + i * 31.7
+        ) - 0.5);
+        frequency *= lacunarity;
+        amplitude *= persistence;
+    }
+    return value;
+}
+
+// ============================================================
+// MAIN API: Generate a heightmap from a CA rule
+// ============================================================
+
 /**
  * Generate a terrain heightmap from a cellular automaton rule.
  *
  * This is the main entry point. Give it a rule number and a seed,
  * get back a smooth heightmap ready to displace vertices.
+ *
+ * Now includes an FBM micro-detail noise pass that adds natural-looking
+ * variation on top of the CA-derived macro features.
  *
  * @param {number} ruleNumber - CA rule (0-255)
  * @param {number} width - Heightmap width (power of 2 recommended: 128, 256, 512)
@@ -182,16 +246,57 @@ export function multiOctaveSmooth(densityGrid, width, height, options = {}) {
  * @param {number} [options.numRuns=8] - CA overlay runs (more = smoother)
  * @param {number[]} [options.scales] - Smoothing radii
  * @param {number[]} [options.weights] - Smoothing weights
+ * @param {number} [options.microDetailAmount=0.08] - FBM noise blend (0=none, 0.15=heavy)
+ * @param {number} [options.microDetailOctaves=4] - FBM noise octaves
+ * @param {number} [options.microDetailScale=0.15] - FBM noise spatial frequency
  * @returns {Float32Array} Heightmap values in [0, 1], flat row-major array
  */
 export function generateHeightmap(ruleNumber, width, height, seed, options = {}) {
-    const { numRuns = 8, scales, weights } = options;
+    const {
+        numRuns = 8,
+        scales,
+        weights,
+        microDetailAmount = 0.08,
+        microDetailOctaves = 4,
+        microDetailScale = 0.15,
+    } = options;
 
     // Step 1: Generate density grid from CA
     const density = generateDensityGrid(ruleNumber, width, height, seed, numRuns);
 
     // Step 2: Multi-octave smoothing
     const heightmap = multiOctaveSmooth(density, width, height, { scales, weights });
+
+    // Step 3: FBM micro-detail noise overlay
+    // This adds natural-looking hills, ridges, and valleys that the
+    // binary CA can't produce. The amount is small enough to preserve
+    // the CA's macro structure while adding "geological" detail.
+    if (microDetailAmount > 0) {
+        const seedOffset = (seed * 13.37 + ruleNumber * 7.91) % 10000;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = y * width + x;
+                const baseH = heightmap[idx];
+
+                // Scale coordinates for noise sampling
+                const nx = x * microDetailScale;
+                const ny = y * microDetailScale;
+
+                // Multi-scale detail:
+                // Medium features (ridges, valleys)
+                const medium = fbmNoise2D(nx, ny, microDetailOctaves, 2.13, 0.45, seedOffset);
+                // Fine features (small bumps, texture)
+                const fine = fbmNoise2D(nx * 3.7, ny * 3.7, 3, 2.3, 0.4, seedOffset + 500);
+
+                // Blend: more detail in mid-elevation (less at extremes for clean coasts/peaks)
+                const elevBlend = 1.0 - Math.pow(2.0 * baseH - 1.0, 2);
+                const detail = (medium * 0.7 + fine * 0.3) * microDetailAmount * elevBlend;
+
+                heightmap[idx] = Math.max(0, Math.min(1, baseH + detail));
+            }
+        }
+    }
 
     return heightmap;
 }
