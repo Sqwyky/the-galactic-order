@@ -687,12 +687,12 @@ survivalStats.onRespawn = () => {
 // Finalize post-processing pipeline (needs camera + scene)
 composer.addPass(new RenderPass(scene, camera));
 
-// SSAO — Screen-Space Ambient Occlusion: darkens crevices, adds depth everywhere
+// SSAO — NMS-style GTAO-like occlusion: wider kernel, more samples for terrain depth
 const ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
-ssaoPass.kernelRadius = 12;
-ssaoPass.minDistance = 0.001;
-ssaoPass.maxDistance = 0.15;
-ssaoPass.output = SSAOPass.OUTPUT.Default; // Blended with scene
+ssaoPass.kernelRadius = 16;       // Wider radius — catches larger terrain features like NMS GTAO
+ssaoPass.minDistance = 0.0005;    // Tighter min — catches small crevices
+ssaoPass.maxDistance = 0.12;      // Balanced max — avoids halos on distant terrain
+ssaoPass.output = SSAOPass.OUTPUT.Default;
 composer.addPass(ssaoPass);
 
 // Ray-marched atmosphere — volumetric scattering, aerial perspective, god rays

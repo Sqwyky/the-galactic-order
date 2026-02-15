@@ -292,7 +292,13 @@ function generateChunk(params) {
                          ruleClass === 3 ? 0.01 :
                          0.012; // Class 4 = most complex
 
-    const octaves = 6; // Extra octave for smoother terrain with more detail
+    const octaves = 6;
+
+    // NMS-style domain warping: warp coordinates through noise before sampling
+    // Creates organic, flowing terrain shapes instead of plain FBM noise
+    const warpSeed = hashSeed(seed, 'warp', rule);
+    const warpScale = featureScale * 0.5; // Large-scale warping
+    const warpAmount = ruleClass >= 3 ? 30.0 : 18.0; // Chaotic rules = more warping
 
     for (let ly = 0; ly < dataSize; ly++) {
         for (let lx = 0; lx < dataSize; lx++) {
@@ -300,12 +306,29 @@ function generateChunk(params) {
             const gx = chunkX * chunkSize + lx;
             const gy = chunkY * chunkSize + ly;
 
-            // FBM noise for elevation and moisture
-            const elev = fbmNoise2D(gx * featureScale, gy * featureScale, elevSeed, octaves);
+            // Domain warping — warp sample coordinates for organic shapes
+            const warpX = fbmNoise2D(gx * warpScale, gy * warpScale, warpSeed, 4);
+            const warpY = fbmNoise2D(gx * warpScale, gy * warpScale, warpSeed + 7777, 4);
+            const wgx = gx + (warpX - 0.5) * warpAmount;
+            const wgy = gy + (warpY - 0.5) * warpAmount;
+
+            // FBM noise for base elevation (using warped coordinates)
+            const baseElev = fbmNoise2D(wgx * featureScale, wgy * featureScale, elevSeed, octaves);
+
+            // Ridge noise — creates dramatic mountain ridges (NMS-style)
+            // Ridge = 1 - |2*noise - 1| — inverted billowed noise
+            const ridgeScale = featureScale * 1.5;
+            const ridgeNoise = perlinNoise2D(wgx * ridgeScale, wgy * ridgeScale, elevSeed + 5555);
+            const ridge = 1.0 - Math.abs(2.0 * ridgeNoise - 1.0);
+            const ridgeWeight = baseElev > 0.55 ? (baseElev - 0.55) / 0.45 : 0; // Only on high terrain
+
+            // Blend base terrain with ridge detail
+            const elev = baseElev * 0.85 + ridge * ridgeWeight * 0.15;
+
+            // Moisture (unwarped — moisture patterns are broader/smoother)
             const moist = fbmNoise2D(gx * featureScale * 0.7, gy * featureScale * 0.7, moistSeed, octaves);
 
-            // Add subtle CA-based detail overlay (rule-specific terrain texture)
-            // Reduced from 8% to 3% to eliminate blocky layered look
+            // Subtle CA-based detail overlay (rule-specific terrain texture)
             const caDetail = getCaDetail(gx, gy, rule, seed, featureScale);
             const finalE = elev * 0.97 + caDetail * 0.03;
 

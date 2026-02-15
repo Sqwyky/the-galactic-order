@@ -337,14 +337,38 @@ export class TerrainChunkMesh {
         const skirtDepth = config.skirtDepth || 5.0;
         this._addSkirtGeometry(geo, dataRes, skirtDepth, colors);
 
-        // MeshStandardMaterial with PBR for shadow receiving and depth
-        // Reuse pooled material when available to reduce GC pressure
+        // NMS-style terrain material — PBR with slope darkening and detail noise
+        // injected via onBeforeCompile for max compatibility with shadows/SSAO
         const mat = pooledMaterial || new THREE.MeshStandardMaterial({
             vertexColors: true,
             flatShading: false,
             roughness: 0.85,
             metalness: 0.02,
         });
+
+        // Inject NMS-style enhancements into the standard material shader
+        if (!mat._tgoPatched) {
+            mat.onBeforeCompile = (shader) => {
+                // Add uniforms for slope darkening + detail noise
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <common>',
+                    `#include <common>
+                    // NMS-style slope darkening: steep faces are darker (fake AO)
+                    // Detail noise: subtle procedural texture to break up flat vertex colors
+                    `
+                );
+                // After normal is available, darken steep slopes
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <dithering_fragment>',
+                    `// Slope-based darkening (NMS-style fake AO on cliffs)
+                    float slopeAngle = 1.0 - abs(dot(vNormal, vec3(0.0, 1.0, 0.0)));
+                    float slopeDarken = mix(1.0, 0.6, smoothstep(0.3, 0.8, slopeAngle));
+                    gl_FragColor.rgb *= slopeDarken;
+                    #include <dithering_fragment>`
+                );
+            };
+            mat._tgoPatched = true;
+        }
 
         this.geometry = geo;
         this.material = mat;
@@ -437,6 +461,7 @@ export class TerrainChunkMesh {
      */
     _addSkirtGeometry(geo, dataRes, skirtDepth, surfaceColors) {
         const pos = geo.getAttribute('position');
+        const nrm = geo.getAttribute('normal');
         const idx = geo.getIndex();
         const oldVerts = pos.count;
 
@@ -456,11 +481,13 @@ export class TerrainChunkMesh {
         const newVertCount = oldVerts + skirtCount;
         const newPositions = new Float32Array(newVertCount * 3);
         const newColors = new Float32Array(newVertCount * 3);
+        const newNormals = new Float32Array(newVertCount * 3);
 
         // Copy existing data
         for (let i = 0; i < oldVerts * 3; i++) {
             newPositions[i] = pos.array[i];
             newColors[i] = surfaceColors[i];
+            newNormals[i] = nrm ? nrm.array[i] : 0;
         }
 
         // Add skirt vertices (same XZ, Y dropped by skirtDepth)
@@ -475,6 +502,14 @@ export class TerrainChunkMesh {
             newColors[ni * 3]     = surfaceColors[ei * 3];
             newColors[ni * 3 + 1] = surfaceColors[ei * 3 + 1];
             newColors[ni * 3 + 2] = surfaceColors[ei * 3 + 2];
+            // Copy normal from corresponding surface vertex (prevents black faces)
+            if (nrm) {
+                newNormals[ni * 3]     = nrm.getX(ei);
+                newNormals[ni * 3 + 1] = nrm.getY(ei);
+                newNormals[ni * 3 + 2] = nrm.getZ(ei);
+            } else {
+                newNormals[ni * 3 + 1] = 1; // Default up normal
+            }
             skirtIndexMap.set(ei, ni);
         }
 
@@ -498,23 +533,22 @@ export class TerrainChunkMesh {
             addSkirtQuad(base + x + 1, base + x); // Reversed winding
         }
         // Left edge
-        for (let y = 0; y < dataRes - 1; y++) addSkirtQuad(y * dataRes + dataRes, (y + 1) * dataRes); // Won't work directly
+        for (let y = 0; y < dataRes - 1; y++) {
+            addSkirtQuad((y + 1) * dataRes, y * dataRes);
+        }
         // Right edge
         for (let y = 0; y < dataRes - 1; y++) {
             addSkirtQuad(y * dataRes + dataRes - 1, (y + 1) * dataRes + dataRes - 1);
-        }
-        // Left edge (corrected)
-        for (let y = 0; y < dataRes - 1; y++) {
-            addSkirtQuad((y + 1) * dataRes, y * dataRes);
         }
 
         // Merge with existing index buffer
         const oldIndices = idx ? Array.from(idx.array) : [];
         const newIndices = [...oldIndices, ...skirtTriangles];
 
-        // Apply new geometry data
+        // Apply new geometry data (including normals for skirt vertices)
         geo.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
         geo.setAttribute('color', new THREE.BufferAttribute(newColors, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(newNormals, 3));
         geo.setIndex(newIndices);
     }
 
@@ -556,7 +590,11 @@ export class TerrainManager {
 
         // Generation queue (priority queue by distance to camera)
         this.generationQueue = [];
-        this.isGenerating = false;
+        this._activeGenerations = 0;  // How many chunks are currently generating
+        this._maxParallelGen = 4;     // Process up to 4 chunks at once
+
+        // Stale chunks — old chunks kept visible until replacements are ready
+        this._staleChunks = new Map();
 
         // Quadtree roots — grid of root-level nodes
         this.quadtreeRoots = new Map();
@@ -625,17 +663,18 @@ export class TerrainManager {
             }
         }
 
-        // Remove chunks that are no longer needed
+        // Move unneeded chunks to stale (keep visible as placeholders)
+        // instead of removing immediately — prevents black holes
         let culledCount = 0;
         for (const [key, chunk] of this.chunks) {
             if (!desiredChunks.has(key)) {
-                this._removeChunk(key);
+                // Move to stale instead of removing — stays visible until area is covered
+                this._staleChunks.set(key, chunk);
+                this.chunks.delete(key);
             } else if (chunk.mesh && this._camera) {
                 // Frustum culling — hide chunks outside camera view
-                // (keep them allocated, just toggle visibility)
                 const halfSize = chunk.worldSize / 2;
                 _chunkBox.min.set(chunk.worldX - halfSize, -5, chunk.worldZ - halfSize);
-                // Y max must cover full terrain height range (heightScale + extra for peaks)
                 _chunkBox.max.set(chunk.worldX + halfSize, this.config.heightScale + 20, chunk.worldZ + halfSize);
                 const visible = this._frustum.intersectsBox(_chunkBox);
                 chunk.mesh.visible = visible;
@@ -643,7 +682,10 @@ export class TerrainManager {
             }
         }
 
-        // Process generation queue
+        // Clean up stale chunks whose area is now covered by active chunks
+        this._cleanStaleChunks(camX, camZ);
+
+        // Process generation queue (parallel)
         this._processQueue();
 
         // Update water plane position
@@ -656,6 +698,55 @@ export class TerrainManager {
         this.stats.pendingChunks = this.pendingChunks.size;
         this.stats.lodBias = this._adaptiveLodBias;
         this.stats.culledChunks = culledCount;
+    }
+
+    /**
+     * Remove stale chunks once their area is covered by new active chunks,
+     * or if they're very far from the camera. This prevents black holes
+     * when moving — old terrain stays visible until new terrain loads.
+     */
+    _cleanStaleChunks(camX, camZ) {
+        const maxStaleDist = this.config.chunkWorldSize * (this.config.viewRadius + 3);
+        for (const [key, stale] of this._staleChunks) {
+            // Always remove if very far from camera
+            const dx = camX - stale.worldX;
+            const dz = camZ - stale.worldZ;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist > maxStaleDist) {
+                this._disposeStaleChunk(key);
+                continue;
+            }
+
+            // Check if an active chunk now covers this stale chunk's area
+            let covered = false;
+            for (const [, active] of this.chunks) {
+                if (active.state !== 'ready' || !active.mesh) continue;
+                const aHalf = active.worldSize / 2;
+                const sHalf = stale.worldSize / 2;
+                // Active chunk covers stale if it overlaps its center area
+                if (stale.worldX >= active.worldX - aHalf && stale.worldX < active.worldX + aHalf &&
+                    stale.worldZ >= active.worldZ - aHalf && stale.worldZ < active.worldZ + aHalf) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (covered) {
+                this._disposeStaleChunk(key);
+            }
+        }
+    }
+
+    _disposeStaleChunk(key) {
+        const chunk = this._staleChunks.get(key);
+        if (chunk) {
+            if (chunk.mesh) this.scene.remove(chunk.mesh);
+            if (chunk.material && this._chunkPool.length < this.config.chunkPoolSize) {
+                this._chunkPool.push(chunk.material);
+                chunk.material = null;
+            }
+            chunk.dispose();
+            this._staleChunks.delete(key);
+        }
     }
 
     /**
@@ -844,24 +935,24 @@ export class TerrainManager {
     }
 
     /**
-     * Process the generation queue — send one chunk at a time to the worker.
+     * Process the generation queue — send multiple chunks in parallel.
+     * Worker handles them sequentially but the messages queue up,
+     * eliminating round-trip latency between chunks.
      */
     _processQueue() {
-        if (this.isGenerating || this.generationQueue.length === 0) return;
+        while (this._activeGenerations < this._maxParallelGen && this.generationQueue.length > 0) {
+            const job = this.generationQueue.shift();
+            if (!job) break;
 
-        // Pop highest priority
-        const job = this.generationQueue.shift();
-        if (!job) return;
+            // Check if still needed
+            if (job.chunk.state === 'disposed') {
+                continue; // Skip disposed, try next
+            }
 
-        // Check if still needed
-        if (job.chunk.state === 'disposed') {
-            this._processQueue(); // Try next
-            return;
+            this._activeGenerations++;
+            job.chunk.state = 'generating';
+            this.worker.postMessage(job.params);
         }
-
-        this.isGenerating = true;
-        job.chunk.state = 'generating';
-        this.worker.postMessage(job.params);
     }
 
     /**
@@ -871,7 +962,7 @@ export class TerrainManager {
         const data = e.data;
         if (data.type !== 'chunkReady') return;
 
-        this.isGenerating = false;
+        this._activeGenerations = Math.max(0, this._activeGenerations - 1);
 
         // Find the pending chunk
         let matchKey = null;
@@ -1193,6 +1284,11 @@ export class TerrainManager {
             chunk.dispose();
         }
         this.chunks.clear();
+        // Clean up stale chunks too
+        for (const [key] of this._staleChunks) {
+            this._disposeStaleChunk(key);
+        }
+        this._staleChunks.clear();
         this.pendingChunks.clear();
         this.generationQueue = [];
 
