@@ -269,6 +269,10 @@ import { PerformanceManager } from './js/rendering/PerformanceManager.js';
 // Creature system
 import { CreatureSystem } from './js/creatures/CreatureSystem.js';
 
+// Galaxy navigation
+import { GalaxyMap } from './js/ui/GalaxyMap.js';
+import { SystemView } from './js/ui/SystemView.js';
+
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -285,6 +289,8 @@ const params = new URLSearchParams(window.location.search);
 let planetRule = parseInt(params.get('rule')) || 30;
 let planetSeed = parseInt(params.get('seed')) || 42;
 let planetName = params.get('name') || generatePlanetName(hashSeed(planetSeed, 'planet', 0));
+const initialSystemX = parseInt(params.get('sx')) || 0;
+const initialSystemY = parseInt(params.get('sy')) || 0;
 
 // ============================================================
 // LOADING
@@ -301,10 +307,12 @@ function setLoading(pct, msg) {
 // LANDING PHASES
 // ============================================================
 const PHASE = {
-    DESCENT: 'descent',   // Flying down through atmosphere
-    LANDING: 'landing',   // Final approach to ground
-    SURFACE: 'surface',   // Walking on the surface
-    FLIGHT: 'flight',     // Flying ship
+    DESCENT: 'descent',       // Flying down through atmosphere
+    LANDING: 'landing',       // Final approach to ground
+    SURFACE: 'surface',       // Walking on the surface
+    FLIGHT: 'flight',         // Flying ship
+    GALAXY_MAP: 'galaxy_map', // Choosing a star system
+    SYSTEM_VIEW: 'system_view', // Choosing a planet in a system
 };
 let currentPhase = PHASE.DESCENT;
 
@@ -823,17 +831,102 @@ const hyperspaceSystem = new HyperspaceSystem(scene, camera);
 const shipHUD = new ShipHUD();
 
 // ============================================================
+// GALAXY NAVIGATION — GalaxyMap + SystemView
+// ============================================================
+
+// Player's galactic position (which star system they're in)
+let currentSystemX = initialSystemX;
+let currentSystemY = initialSystemY;
+
+// Galaxy Map — 2D star picker
+const galaxyMap = new GalaxyMap({
+    onSystemSelected: (systemEntry) => {
+        // Player clicked a star on the galaxy map → open 3D system view
+        galaxyMap.close();
+        currentPhase = PHASE.SYSTEM_VIEW;
+        systemView.open(systemEntry.system);
+    },
+    onCancel: () => {
+        // ESC pressed on galaxy map → return to flight
+        returnToFlight();
+    },
+});
+
+// System View — 3D planet picker
+const systemView = new SystemView({
+    onPlanetSelected: (ghost, systemData) => {
+        // Player clicked a landable planet → warp to it
+        systemView.close();
+
+        // Update galactic position
+        currentSystemX = systemData.coordinates.x;
+        currentSystemY = systemData.coordinates.y;
+        galaxyMap.setPlayerPosition(currentSystemX, currentSystemY);
+
+        // Warp to the selected planet
+        transitionToPlanet(ghost.rule, ghost.seed);
+    },
+    onBack: () => {
+        // Return to galaxy map from system view
+        currentPhase = PHASE.GALAXY_MAP;
+        galaxyMap.open(currentSystemX, currentSystemY);
+    },
+    onCancel: () => {
+        // ESC pressed on system view → return to flight
+        returnToFlight();
+    },
+});
+
+/**
+ * Return to flight mode from galaxy/system view (ESC cancel).
+ * Repositions the ship and re-enables flight systems.
+ */
+function returnToFlight() {
+    currentPhase = PHASE.FLIGHT;
+
+    // Re-enable flight systems at current ship position
+    const shipPos = shipModel.group.position.clone();
+    shipPos.y = Math.max(shipPos.y, 60); // Ensure reasonable altitude
+    flightController.enable(shipPos);
+    weaponSystem.enable();
+    scannerSystem.enable();
+    hyperspaceSystem.enable();
+    shipHUD.show();
+
+    document.getElementById('phaseName').textContent = 'FLIGHT MODE';
+    document.getElementById('phaseInfo').textContent = `${planetName} · Ship Active`;
+
+    console.log('[TGO] Returned to flight mode (navigation cancelled)');
+}
+
+// ============================================================
 // SEAMLESS PLANET TRANSITION — no loading screen, no page reload
 // ============================================================
 // When the player jumps to a new planet via hyperspace, this function
 // disposes the old world and recreates everything with new parameters.
 // The flash overlay hides the transition; descent animation plays on arrival.
 //
-// Flow: FLIGHT → charge → flash → [dispose/recreate] → DESCENT → SURFACE
+// Flow: FLIGHT → charge → GALAXY_MAP → SYSTEM_VIEW → warp → DESCENT → SURFACE
 
-hyperspaceSystem.onJump = (newRule, newSeed) => transitionToPlanet(newRule, newSeed);
+hyperspaceSystem.onJump = () => {
+    // Hyperspace charged → open galaxy map for destination selection
+    currentPhase = PHASE.GALAXY_MAP;
+
+    // Disable flight systems while in map
+    flightController.disable();
+    weaponSystem.disable();
+    scannerSystem.disable();
+    hyperspaceSystem.disable();
+    shipHUD.hide();
+
+    hyperspaceSystem.resetJumpState();
+    galaxyMap.open(currentSystemX, currentSystemY);
+};
 
 function transitionToPlanet(newRule, newSeed) {
+    // ---- Flash overlay for warp effect ----
+    hyperspaceSystem.flashOverlay.style.opacity = '1';
+
     // ---- Phase lock: prevent game loop from updating stale systems ----
     currentPhase = PHASE.DESCENT;
 
@@ -863,7 +956,7 @@ function transitionToPlanet(newRule, newSeed) {
     planetName = generatePlanetName(hashSeed(planetSeed, 'planet', 0));
 
     // Update URL so refresh works (no page reload)
-    history.replaceState(null, '', `landing.html?rule=${newRule}&seed=${newSeed}`);
+    history.replaceState(null, '', `landing.html?rule=${newRule}&seed=${newSeed}&sx=${currentSystemX}&sy=${currentSystemY}`);
 
     // ---- Recalculate planet characteristics from CA rule + seed ----
     classification = classifyRule(planetRule);
@@ -1009,9 +1102,13 @@ function transitionToPlanet(newRule, newSeed) {
         hyperspaceSystem.resetJumpState();
     }, 300);
 
+    // ---- Auto-save galactic position ----
+    saveGame();
+
     console.log(
         `[TGO] ★ Warped to ${planetName} ` +
-        `(Rule ${planetRule}, Seed ${planetSeed}, ${planetMood.bandLabel} ${planetMood.moodName})`
+        `(Rule ${planetRule}, Seed ${planetSeed}, ${planetMood.bandLabel} ${planetMood.moodName}) ` +
+        `@ System [${currentSystemX}, ${currentSystemY}]`
     );
 }
 
@@ -1060,7 +1157,7 @@ function enterShip() {
 
     // Update phase HUD
     document.getElementById('phaseName').textContent = 'FLIGHT MODE';
-    document.getElementById('phaseInfo').textContent = `${planetName} · Ship Active`;
+    document.getElementById('phaseInfo').textContent = `${planetName} · System [${currentSystemX}, ${currentSystemY}]`;
 
     console.log('[TGO] Entered ship — flight mode active');
 }
@@ -1098,7 +1195,7 @@ function exitShip() {
 
 // Global E key listener (always active after landing)
 document.addEventListener('keydown', (e) => {
-    if (e.code === 'KeyE' && currentPhase !== PHASE.DESCENT) {
+    if (e.code === 'KeyE' && (currentPhase === PHASE.SURFACE || currentPhase === PHASE.FLIGHT)) {
         // Don't toggle during dialogue or tablet
         if (dialogue && dialogue.isDialogueActive()) return;
         if (tablet && tablet.isOpen) return;
@@ -1587,6 +1684,50 @@ function animate() {
     }
 }
 
+// ============================================================
+// SAVE / LOAD — persist player's galactic position
+// ============================================================
+const SAVE_KEY = 'tgo_save';
+
+function saveGame() {
+    try {
+        const saveData = {
+            systemX: currentSystemX,
+            systemY: currentSystemY,
+            planetRule,
+            planetSeed,
+            timestamp: Date.now(),
+        };
+        localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
+        console.log('[TGO] Game saved:', saveData);
+    } catch (e) {
+        console.warn('[TGO] Save failed:', e.message);
+    }
+}
+
+function loadGame() {
+    try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) {
+        console.warn('[TGO] Load failed:', e.message);
+        return null;
+    }
+}
+
+// Auto-load saved position if no URL params were provided
+if (!params.has('rule') && !params.has('seed')) {
+    const saved = loadGame();
+    if (saved) {
+        currentSystemX = saved.systemX;
+        currentSystemY = saved.systemY;
+        // Note: planetRule/planetSeed are already set from URL defaults;
+        // the saved values match what was in the URL when saved
+        console.log(`[TGO] Loaded save: System [${saved.systemX}, ${saved.systemY}]`);
+    }
+}
+
 // Start!
 animate();
 
@@ -1609,6 +1750,9 @@ window._debug = {
     get inventory() { return inventory; },
     get perf() { return perfManager; },
     get phase() { return currentPhase; },
+    get galaxyMap() { return galaxyMap; },
+    get systemView() { return systemView; },
+    get galacticPos() { return { x: currentSystemX, y: currentSystemY }; },
     warpTo: transitionToPlanet,
 };
 

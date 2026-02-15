@@ -159,18 +159,14 @@ export class HyperspaceSystem {
         // Flash screen white
         this.flashOverlay.style.opacity = '1';
 
-        // After flash peak, seamlessly transition to new planet (no page reload)
+        // After flash peak, open the galaxy map for destination selection
         setTimeout(() => {
-            const newRule = Math.floor(Math.random() * 256);
-            const newSeed = Math.floor(Math.random() * 100000);
+            // Fade out flash immediately — the galaxy map takes over
+            this.flashOverlay.style.opacity = '0';
 
             if (this.onJump) {
-                // Seamless in-page transition — dispose old world, build new one
-                this.onJump(newRule, newSeed);
-            } else {
-                // Fallback: legacy page redirect
-                window.location.href =
-                    `landing.html?rule=${newRule}&seed=${newSeed}`;
+                // Open galaxy map — no more random warps
+                this.onJump();
             }
         }, 800);
     }
