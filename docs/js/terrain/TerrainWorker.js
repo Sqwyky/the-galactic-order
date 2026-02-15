@@ -292,7 +292,7 @@ function generateChunk(params) {
                          ruleClass === 3 ? 0.01 :
                          0.012; // Class 4 = most complex
 
-    const octaves = 5;
+    const octaves = 6; // Extra octave for smoother terrain with more detail
 
     for (let ly = 0; ly < dataSize; ly++) {
         for (let lx = 0; lx < dataSize; lx++) {
@@ -305,8 +305,9 @@ function generateChunk(params) {
             const moist = fbmNoise2D(gx * featureScale * 0.7, gy * featureScale * 0.7, moistSeed, octaves);
 
             // Add subtle CA-based detail overlay (rule-specific terrain texture)
+            // Reduced from 8% to 3% to eliminate blocky layered look
             const caDetail = getCaDetail(gx, gy, rule, seed, featureScale);
-            const finalE = elev * 0.92 + caDetail * 0.08;
+            const finalE = elev * 0.97 + caDetail * 0.03;
 
             const idx = ly * dataSize + lx;
             finalElev[idx] = Math.max(0, Math.min(1, finalE));
@@ -338,8 +339,9 @@ function classifyRuleClass(rule) {
 }
 
 // Add CA-flavored detail: use the rule to create unique terrain texture
+// Uses smooth noise blending to avoid binary step artifacts
 function getCaDetail(gx, gy, rule, seed, scale) {
-    // Simple 1D CA step for texture flavoring
+    // 1D CA step for rule-specific texture flavoring
     const h0 = hashSeed(seed, gx - 1, gy);
     const h1 = hashSeed(seed, gx, gy);
     const h2 = hashSeed(seed, gx + 1, gy);
@@ -349,9 +351,11 @@ function getCaDetail(gx, gy, rule, seed, scale) {
     const pattern = (left << 2) | (center << 1) | right;
     const caBit = (rule >> pattern) & 1;
 
-    // Blend with smooth noise for less harsh transitions
-    const smooth = perlinNoise2D(gx * scale * 3, gy * scale * 3, seed + 777);
-    return caBit * 0.4 + smooth * 0.6;
+    // Multiple smooth noise layers to soften CA binary transitions
+    const smooth1 = perlinNoise2D(gx * scale * 3, gy * scale * 3, seed + 777);
+    const smooth2 = perlinNoise2D(gx * scale * 1.5, gy * scale * 1.5, seed + 1234);
+    // Blend CA bit with smooth noise (20% CA, 80% smooth) for painterly look
+    return caBit * 0.2 + smooth1 * 0.5 + smooth2 * 0.3;
 }
 
 // ============================================================

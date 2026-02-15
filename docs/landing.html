@@ -159,6 +159,67 @@
             top: 50%; left: 0;
         }
 
+        /* Ship Summon Menu */
+        #ship-menu {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+            pointer-events: all;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+        #ship-menu.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+        #ship-menu .menu-title {
+            color: #00ff88;
+            font-size: 12px;
+            letter-spacing: 4px;
+            text-align: center;
+            margin-bottom: 16px;
+        }
+        #ship-menu .menu-items {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: center;
+        }
+        #ship-menu .menu-item {
+            background: rgba(0, 30, 20, 0.85);
+            border: 1px solid rgba(0, 255, 136, 0.25);
+            color: #aaddcc;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            letter-spacing: 2px;
+            padding: 10px 32px;
+            cursor: pointer;
+            width: 260px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        #ship-menu .menu-item:hover {
+            background: rgba(0, 60, 40, 0.9);
+            border-color: rgba(0, 255, 136, 0.6);
+            color: #00ff88;
+            text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+        }
+        #ship-menu .menu-item .item-desc {
+            color: #445;
+            font-size: 9px;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+        #ship-menu .menu-close {
+            color: #445;
+            font-size: 10px;
+            text-align: center;
+            margin-top: 12px;
+            letter-spacing: 2px;
+        }
+
         /* Loading */
         #loading {
             position: fixed;
@@ -213,10 +274,30 @@
         <span class="key">SHIFT</span>
         <span class="key">SPACE</span>
         <span class="key">E</span>
-        <div class="desc">MOVE · SPRINT · JUMP · BOARD SHIP — CLICK TO MINE/LOOK</div>
+        <span class="key">X</span>
+        <div class="desc">MOVE · SPRINT · JUMP · BOARD SHIP · SUMMON SHIP — CLICK TO MINE/LOOK</div>
     </div>
 
     <div id="perf"></div>
+</div>
+
+<div id="ship-menu">
+    <div class="menu-title">SHIP COMMAND</div>
+    <div class="menu-items">
+        <div class="menu-item" id="menu-summon-ship">
+            SUMMON SHIP
+            <div class="item-desc">Call your ship to your location</div>
+        </div>
+        <div class="menu-item" id="menu-board-ship">
+            BOARD SHIP
+            <div class="item-desc">Teleport to and enter your ship</div>
+        </div>
+        <div class="menu-item" id="menu-ship-status">
+            SHIP STATUS
+            <div class="item-desc">Voidmoth Mk-I · Systems nominal</div>
+        </div>
+    </div>
+    <div class="menu-close">[ X ] CLOSE</div>
 </div>
 
 <div id="loading">
@@ -580,6 +661,9 @@ const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerH
 // Start high up for descent
 camera.position.set(0, 200, 0);
 camera.lookAt(0, 0, 0);
+
+// Camera MUST be added to scene for camera.add() children (FPS view model) to render
+scene.add(camera);
 
 // First-person view model (arm + multi-tool, visible on surface)
 const fpsViewModel = new FPSViewModel(camera);
@@ -1331,6 +1415,94 @@ document.addEventListener('keydown', (e) => {
         if (dialogue && dialogue.isDialogueActive()) return;
         if (tablet && tablet.isOpen) return;
         handleShipToggle();
+    }
+});
+
+// ============================================================
+// SHIP SUMMON MENU (X KEY)
+// ============================================================
+let shipMenuOpen = false;
+
+function toggleShipMenu() {
+    const menu = document.getElementById('ship-menu');
+    shipMenuOpen = !shipMenuOpen;
+    if (shipMenuOpen) {
+        menu.classList.add('visible');
+        // Release pointer lock so mouse can click menu items
+        if (document.pointerLockElement) document.exitPointerLock();
+    } else {
+        menu.classList.remove('visible');
+    }
+}
+
+function closeShipMenu() {
+    const menu = document.getElementById('ship-menu');
+    shipMenuOpen = false;
+    menu.classList.remove('visible');
+}
+
+function summonShipToPlayer() {
+    const playerPos = camera.position;
+    // Place ship 8m in front of where the player is looking
+    const lookDir = walker.getLookDirection();
+    const shipX = playerPos.x + lookDir.x * 12;
+    const shipZ = playerPos.z + lookDir.z * 12;
+    const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || 0;
+
+    shipModel.group.position.set(shipX, shipGroundH + 3.5, shipZ);
+    shipModel.group.visible = true;
+    shipModel.setLandingGear(true);
+    shipGrounded = true;
+
+    tablet.addDiscovery('Ship summoned to your location. Press E to board.');
+    audioManager.playSFX('landing');
+    closeShipMenu();
+    console.log('[TGO] Ship summoned to player position');
+}
+
+function teleportToShip() {
+    if (!shipModel.group.visible) {
+        // Ship not on planet, summon it first
+        summonShipToPlayer();
+        return;
+    }
+
+    const shipPos = shipModel.group.position;
+    const groundH = terrainManager.getHeightAt(shipPos.x + 3, shipPos.z + 3) || 0;
+    walker.enable(new THREE.Vector3(shipPos.x + 3, groundH + 1.7, shipPos.z + 3));
+    closeShipMenu();
+    console.log('[TGO] Teleported to ship');
+}
+
+// Ship menu button handlers
+document.getElementById('menu-summon-ship').addEventListener('click', () => {
+    summonShipToPlayer();
+});
+document.getElementById('menu-board-ship').addEventListener('click', () => {
+    teleportToShip();
+    // Slight delay then enter ship
+    setTimeout(() => {
+        if (currentPhase === PHASE.SURFACE) {
+            enterShip();
+        }
+    }, 100);
+});
+document.getElementById('menu-ship-status').addEventListener('click', () => {
+    // Just close the menu and show status in tablet
+    closeShipMenu();
+    tablet.addDiscovery('Voidmoth Mk-I Status: All systems nominal. Hull: 100%. Fuel: 87%.');
+});
+
+// X key handler
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyX' && currentPhase === PHASE.SURFACE) {
+        if (dialogue && dialogue.isDialogueActive()) return;
+        if (tablet && tablet.isOpen) return;
+        toggleShipMenu();
+    }
+    // Also close menu on Escape
+    if (e.code === 'Escape' && shipMenuOpen) {
+        closeShipMenu();
     }
 });
 

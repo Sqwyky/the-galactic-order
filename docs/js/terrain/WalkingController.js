@@ -39,7 +39,7 @@ export const WALK_CONFIG = {
 
     // Physics
     groundSnapDistance: 3.5,   // how far below to check for ground
-    slopeSmoothing: 0.06,     // smoother camera on bigger terrain slopes
+    slopeSmoothing: 0.12,     // smoother camera on terrain slopes (higher = smoother)
 };
 
 // ============================================================

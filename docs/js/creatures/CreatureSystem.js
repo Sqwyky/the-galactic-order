@@ -140,15 +140,19 @@ export class CreatureSystem {
                 creature.groundY = groundY;
             }
 
-            // Apply position
+            // Apply position with smooth ground following
             const ap = creature.species.animParams;
             const bob = Math.sin(creature.time * ap.bobSpeed) * ap.bobAmount;
             const sway = Math.sin(creature.time * ap.swaySpeed) * ap.swayAmount;
-            const floatY = ap.floatHeight;
+            const floatY = ap.floatHeight || 0;
+
+            // Smooth ground following to prevent vertical teleporting when LOD chunks load
+            if (creature._smoothGroundY === undefined) creature._smoothGroundY = creature.groundY;
+            creature._smoothGroundY += (creature.groundY - creature._smoothGroundY) * Math.min(1, dt * 5);
 
             creature.mesh.position.set(
                 aiState.x + sway,
-                creature.groundY + ap.groundOffset + bob + floatY,
+                creature._smoothGroundY + ap.groundOffset + bob + floatY,
                 aiState.z
             );
             creature.mesh.rotation.y = aiState.facing;
@@ -161,8 +165,9 @@ export class CreatureSystem {
                     if (!leg) continue;
                     const phase = (cycle + j / creature.species.legs.length) % 1.0;
                     const swing = Math.sin(phase * Math.PI * 2) * 0.3;
-                    // Only animate if walking
-                    if (aiState.state === 'wander' || aiState.state === 'flee') {
+                    // Animate legs for all movement states (not just wander/flee)
+                    if (aiState.state === 'wander' || aiState.state === 'flee' ||
+                        aiState.state === 'stalk' || aiState.state === 'attack' || aiState.state === 'retreat') {
                         leg.rotation.x = swing;
                     } else {
                         leg.rotation.x *= 0.9; // Decay to standing
@@ -170,10 +175,11 @@ export class CreatureSystem {
                 }
             }
 
-            // Head bob (grazing animation)
+            // Head bob (grazing animation) — use SET not ADD to prevent Y drift
             const headMesh = creature.mesh.children[1]; // Second child is head
             if (headMesh && headMesh.isMesh) {
-                headMesh.position.y += aiState.headBob;
+                if (creature._baseHeadY === undefined) creature._baseHeadY = headMesh.position.y;
+                headMesh.position.y = creature._baseHeadY + aiState.headBob;
             }
 
             // Despawn check

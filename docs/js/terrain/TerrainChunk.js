@@ -61,7 +61,8 @@ export const TERRAIN_CONFIG = {
 
     // Hysteresis factor — chunk must be this much further to merge back
     // Prevents rapid split/merge oscillation at boundary distances
-    mergeHysteresis: 1.3,
+    // Higher value = more stable chunks, less popping when approaching
+    mergeHysteresis: 1.8,
 
     // Root chunk size at level 0 (covers wide area)
     rootChunkSize: 512,
@@ -253,12 +254,15 @@ export class TerrainChunkMesh {
             let height = 0;
             const wl = config.waterLevel;
             if (elevation > wl + 0.05) {
-                // Above water: gentle power curve for smooth rolling hills
+                // Above water: smooth Hermite curve for rolling hills (no sharp steps)
                 const normalizedElev = (elevation - wl) / (1.0 - wl);
-                height = Math.pow(normalizedElev, 1.15) * config.heightScale;
-                // Gentle extra lift for high peaks (restrained to keep smooth)
-                if (elevation > 0.75) {
-                    height += (elevation - 0.75) * config.heightScale * 0.25;
+                // Smoothstep-inspired curve: gentle at low elevations, steeper for mountains
+                const smoothElev = normalizedElev * normalizedElev * (3.0 - 2.0 * normalizedElev);
+                height = smoothElev * config.heightScale;
+                // Gradual extra lift for high peaks
+                if (normalizedElev > 0.7) {
+                    const peakFactor = (normalizedElev - 0.7) / 0.3; // 0-1 for peak range
+                    height += peakFactor * peakFactor * config.heightScale * 0.2;
                 }
             } else if (elevation > wl - 0.05) {
                 // Beach/shoreline transition zone — smooth blend from water to land
@@ -328,6 +332,11 @@ export class TerrainChunkMesh {
         geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geo.computeVertexNormals();
 
+        // Add skirt geometry to hide LOD cracks between chunks
+        // Skirts extend downward from edge vertices, covering gaps at LOD transitions
+        const skirtDepth = config.skirtDepth || 5.0;
+        this._addSkirtGeometry(geo, dataRes, skirtDepth, colors);
+
         // MeshStandardMaterial with PBR for shadow receiving and depth
         // Reuse pooled material when available to reduce GC pressure
         const mat = pooledMaterial || new THREE.MeshStandardMaterial({
@@ -377,14 +386,16 @@ export class TerrainChunkMesh {
         const elevation = e00 * (1 - fx) * (1 - fy) + e10 * fx * (1 - fy) +
                          e01 * (1 - fx) * fy + e11 * fx * fy;
 
-        // Same height formula as buildMesh
+        // Same height formula as buildMesh (MUST be kept in sync!)
         const wl = TERRAIN_CONFIG.waterLevel;
         let height = 0;
         if (elevation > wl + 0.05) {
             const normalizedElev = (elevation - wl) / (1.0 - wl);
-            height = Math.pow(normalizedElev, 1.15) * TERRAIN_CONFIG.heightScale;
-            if (elevation > 0.75) {
-                height += (elevation - 0.75) * TERRAIN_CONFIG.heightScale * 0.25;
+            const smoothElev = normalizedElev * normalizedElev * (3.0 - 2.0 * normalizedElev);
+            height = smoothElev * TERRAIN_CONFIG.heightScale;
+            if (normalizedElev > 0.7) {
+                const peakFactor = (normalizedElev - 0.7) / 0.3;
+                height += peakFactor * peakFactor * TERRAIN_CONFIG.heightScale * 0.2;
             }
         } else if (elevation > wl - 0.05) {
             const t = (elevation - (wl - 0.05)) / 0.10;
@@ -418,6 +429,93 @@ export class TerrainChunkMesh {
 
         // Return the biome at nearest grid point
         return this.biomeIds[gy * dataRes + gx];
+    }
+
+    /**
+     * Add skirt geometry around chunk edges to hide LOD transition cracks.
+     * Creates downward-extending triangles from edge vertices.
+     */
+    _addSkirtGeometry(geo, dataRes, skirtDepth, surfaceColors) {
+        const pos = geo.getAttribute('position');
+        const idx = geo.getIndex();
+        const oldVerts = pos.count;
+
+        // Collect edge vertex indices (perimeter of the grid)
+        const edgeIndices = [];
+        for (let x = 0; x < dataRes; x++) {
+            edgeIndices.push(x);                                   // Top edge
+            edgeIndices.push((dataRes - 1) * dataRes + x);        // Bottom edge
+        }
+        for (let y = 1; y < dataRes - 1; y++) {
+            edgeIndices.push(y * dataRes);                         // Left edge
+            edgeIndices.push(y * dataRes + dataRes - 1);          // Right edge
+        }
+
+        // Create new arrays with skirt vertices appended
+        const skirtCount = edgeIndices.length;
+        const newVertCount = oldVerts + skirtCount;
+        const newPositions = new Float32Array(newVertCount * 3);
+        const newColors = new Float32Array(newVertCount * 3);
+
+        // Copy existing data
+        for (let i = 0; i < oldVerts * 3; i++) {
+            newPositions[i] = pos.array[i];
+            newColors[i] = surfaceColors[i];
+        }
+
+        // Add skirt vertices (same XZ, Y dropped by skirtDepth)
+        const skirtIndexMap = new Map(); // edgeVertexIndex -> newVertexIndex
+        for (let i = 0; i < skirtCount; i++) {
+            const ei = edgeIndices[i];
+            const ni = oldVerts + i;
+            newPositions[ni * 3]     = pos.getX(ei);
+            newPositions[ni * 3 + 1] = pos.getY(ei) - skirtDepth;
+            newPositions[ni * 3 + 2] = pos.getZ(ei);
+            // Same color as surface vertex
+            newColors[ni * 3]     = surfaceColors[ei * 3];
+            newColors[ni * 3 + 1] = surfaceColors[ei * 3 + 1];
+            newColors[ni * 3 + 2] = surfaceColors[ei * 3 + 2];
+            skirtIndexMap.set(ei, ni);
+        }
+
+        // Build skirt triangles along each edge
+        const skirtTriangles = [];
+
+        // Helper: add skirt quad between two adjacent edge vertices
+        const addSkirtQuad = (a, b) => {
+            const sa = skirtIndexMap.get(a);
+            const sb = skirtIndexMap.get(b);
+            if (sa === undefined || sb === undefined) return;
+            skirtTriangles.push(a, sa, b);
+            skirtTriangles.push(b, sa, sb);
+        };
+
+        // Top edge (y=0 row)
+        for (let x = 0; x < dataRes - 1; x++) addSkirtQuad(x, x + 1);
+        // Bottom edge
+        for (let x = 0; x < dataRes - 1; x++) {
+            const base = (dataRes - 1) * dataRes;
+            addSkirtQuad(base + x + 1, base + x); // Reversed winding
+        }
+        // Left edge
+        for (let y = 0; y < dataRes - 1; y++) addSkirtQuad(y * dataRes + dataRes, (y + 1) * dataRes); // Won't work directly
+        // Right edge
+        for (let y = 0; y < dataRes - 1; y++) {
+            addSkirtQuad(y * dataRes + dataRes - 1, (y + 1) * dataRes + dataRes - 1);
+        }
+        // Left edge (corrected)
+        for (let y = 0; y < dataRes - 1; y++) {
+            addSkirtQuad((y + 1) * dataRes, y * dataRes);
+        }
+
+        // Merge with existing index buffer
+        const oldIndices = idx ? Array.from(idx.array) : [];
+        const newIndices = [...oldIndices, ...skirtTriangles];
+
+        // Apply new geometry data
+        geo.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(newColors, 3));
+        geo.setIndex(newIndices);
     }
 
     dispose() {
@@ -537,7 +635,8 @@ export class TerrainManager {
                 // (keep them allocated, just toggle visibility)
                 const halfSize = chunk.worldSize / 2;
                 _chunkBox.min.set(chunk.worldX - halfSize, -5, chunk.worldZ - halfSize);
-                _chunkBox.max.set(chunk.worldX + halfSize, 30, chunk.worldZ + halfSize);
+                // Y max must cover full terrain height range (heightScale + extra for peaks)
+                _chunkBox.max.set(chunk.worldX + halfSize, this.config.heightScale + 20, chunk.worldZ + halfSize);
                 const visible = this._frustum.intersectsBox(_chunkBox);
                 chunk.mesh.visible = visible;
                 if (!visible) culledCount++;
