@@ -1,11 +1,17 @@
 /**
  * THE GALACTIC ORDER - Creature AI (Behavior System)
  *
- * Simple finite-state behavior for alien creatures:
+ * Finite-state behavior for alien creatures:
  *   IDLE     → Standing still, looking around, occasional body animation
  *   WANDER   → Slowly walking to a random nearby point
  *   FLEE     → Running away from the player (when too close)
  *   GRAZE    → Head dipping down (eating animation), then back to idle
+ *   STALK    → Hostile: slowly approaching the player from a distance
+ *   ATTACK   → Hostile: lunging at the player to deal damage
+ *   RETREAT  → Hostile: backing off after an attack before re-engaging
+ *
+ * Passive creatures flee from the player.
+ * Hostile creatures stalk, attack, then retreat in a loop.
  *
  * State transitions are probabilistic + proximity-driven.
  * All movement is smooth (lerped) for organic feel.
@@ -21,10 +27,13 @@ import { hashSeed } from '../generation/hashSeed.js';
 // ============================================================
 
 export const CREATURE_STATE = {
-    IDLE:   'idle',
-    WANDER: 'wander',
-    FLEE:   'flee',
-    GRAZE:  'graze',
+    IDLE:    'idle',
+    WANDER:  'wander',
+    FLEE:    'flee',
+    GRAZE:   'graze',
+    STALK:   'stalk',
+    ATTACK:  'attack',
+    RETREAT: 'retreat',
 };
 
 // ============================================================
@@ -40,6 +49,10 @@ export class CreatureAI {
      * @param {number} options.fleeSpeed - Speed multiplier when fleeing
      * @param {number} options.wanderRadius - Max wander distance from spawn
      * @param {number} options.seed - Per-creature seed for deterministic behavior
+     * @param {boolean} [options.hostile=false] - Whether this creature attacks
+     * @param {number} [options.attackDamage=8] - Damage per attack
+     * @param {number} [options.aggroRange=15] - Distance to notice player
+     * @param {number} [options.attackRange=3] - Distance to lunge
      */
     constructor(options = {}) {
         this.moveSpeed = options.moveSpeed || 2.0;
@@ -47,6 +60,15 @@ export class CreatureAI {
         this.fleeDistance = options.fleeDistance || 8.0;
         this.fleeSpeed = options.fleeSpeed || 2.5;
         this.wanderRadius = options.wanderRadius || 20.0;
+
+        // Hostile behavior
+        this.hostile = options.hostile || false;
+        this.attackDamage = options.attackDamage || 8;
+        this.aggroRange = options.aggroRange || 15;
+        this.attackRange = options.attackRange || 3;
+        this.attackCooldown = 1.5;     // Seconds between attacks
+        this._attackTimer = 0;
+        this._didAttack = false;       // Flag for damage event this frame
 
         // State
         this.state = CREATURE_STATE.IDLE;
@@ -96,9 +118,12 @@ export class CreatureAI {
      * @param {number} dt - Delta time (seconds)
      * @param {number} playerX - Player world X
      * @param {number} playerZ - Player world Z
-     * @returns {{ x: number, z: number, facing: number, walkCycle: number, state: string }}
+     * @returns {{ x, z, facing, walkCycle, headBob, state, didAttack, attackDamage }}
      */
     update(dt, playerX, playerZ) {
+        this._didAttack = false;
+        this._attackTimer = Math.max(0, this._attackTimer - dt);
+
         // Distance to player
         const dx = playerX - this.posX;
         const dz = playerZ - this.posZ;
@@ -107,30 +132,34 @@ export class CreatureAI {
         // State timer
         this.stateTimer += dt;
 
-        // --- FLEE CHECK (highest priority) ---
-        if (distToPlayer < this.fleeDistance && this.state !== CREATURE_STATE.FLEE) {
-            this._enterFlee(playerX, playerZ);
-        }
+        // --- HOSTILE BEHAVIOR ---
+        if (this.hostile) {
+            this._updateHostile(dt, playerX, playerZ, distToPlayer);
+        } else {
+            // --- PASSIVE BEHAVIOR ---
+            // Flee check (highest priority for passive creatures)
+            if (distToPlayer < this.fleeDistance && this.state !== CREATURE_STATE.FLEE) {
+                this._enterFlee(playerX, playerZ);
+            }
 
-        // --- STATE MACHINE ---
-        switch (this.state) {
-            case CREATURE_STATE.IDLE:
-                this._updateIdle(dt);
-                break;
-            case CREATURE_STATE.WANDER:
-                this._updateWander(dt);
-                break;
-            case CREATURE_STATE.FLEE:
-                this._updateFlee(dt, playerX, playerZ);
-                break;
-            case CREATURE_STATE.GRAZE:
-                this._updateGraze(dt);
-                break;
+            switch (this.state) {
+                case CREATURE_STATE.IDLE:
+                    this._updateIdle(dt);
+                    break;
+                case CREATURE_STATE.WANDER:
+                    this._updateWander(dt);
+                    break;
+                case CREATURE_STATE.FLEE:
+                    this._updateFlee(dt, playerX, playerZ);
+                    break;
+                case CREATURE_STATE.GRAZE:
+                    this._updateGraze(dt);
+                    break;
+            }
         }
 
         // Smooth rotation toward target facing
         let angleDiff = this.targetFacing - this.facing;
-        // Normalize to [-PI, PI]
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
         this.facing += angleDiff * Math.min(1, this.turnSpeed * dt);
@@ -142,11 +171,159 @@ export class CreatureAI {
             walkCycle: this.walkCycle,
             headBob: this.headBob,
             state: this.state,
+            didAttack: this._didAttack,
+            attackDamage: this.attackDamage,
         };
     }
 
     // ============================================================
-    // STATE BEHAVIORS
+    // HOSTILE STATE MACHINE
+    // ============================================================
+
+    _updateHostile(dt, playerX, playerZ, distToPlayer) {
+        switch (this.state) {
+            case CREATURE_STATE.IDLE:
+            case CREATURE_STATE.WANDER:
+            case CREATURE_STATE.GRAZE:
+                // Check for aggro
+                if (distToPlayer < this.aggroRange) {
+                    this._enterStalk(playerX, playerZ);
+                } else {
+                    // Normal passive behavior when player is far
+                    if (this.state === CREATURE_STATE.IDLE) this._updateIdle(dt);
+                    else if (this.state === CREATURE_STATE.WANDER) this._updateWander(dt);
+                    else this._updateGraze(dt);
+                }
+                break;
+
+            case CREATURE_STATE.STALK:
+                this._updateStalk(dt, playerX, playerZ, distToPlayer);
+                break;
+
+            case CREATURE_STATE.ATTACK:
+                this._updateAttack(dt, playerX, playerZ, distToPlayer);
+                break;
+
+            case CREATURE_STATE.RETREAT:
+                this._updateRetreat(dt, playerX, playerZ, distToPlayer);
+                break;
+        }
+    }
+
+    _enterStalk(playerX, playerZ) {
+        this.state = CREATURE_STATE.STALK;
+        this.stateTimer = 0;
+        this.stateDuration = 3.0 + this._rng() * 4.0;
+        this.targetFacing = Math.atan2(playerX - this.posX, playerZ - this.posZ);
+    }
+
+    _updateStalk(dt, playerX, playerZ, distToPlayer) {
+        // Face the player
+        this.targetFacing = Math.atan2(playerX - this.posX, playerZ - this.posZ);
+
+        // Move toward player at reduced speed
+        const dx = playerX - this.posX;
+        const dz = playerZ - this.posZ;
+        const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+
+        if (distToPlayer > this.attackRange) {
+            const speed = this.moveSpeed * 0.7 * dt;
+            this.posX += (dx / dist) * speed;
+            this.posZ += (dz / dist) * speed;
+            this.walkCycle = (this.walkCycle + dt * this.moveSpeed * 2.0) % 1.0;
+            this.headBob = Math.sin(this.walkCycle * Math.PI * 2) * 0.03;
+        }
+
+        // Close enough to attack?
+        if (distToPlayer <= this.attackRange && this._attackTimer <= 0) {
+            this._enterAttack(playerX, playerZ);
+        }
+
+        // Lost interest? (player ran far away)
+        if (distToPlayer > this.aggroRange * 2) {
+            this.state = CREATURE_STATE.IDLE;
+            this.stateTimer = 0;
+            this.stateDuration = 2.0;
+        }
+    }
+
+    _enterAttack(playerX, playerZ) {
+        this.state = CREATURE_STATE.ATTACK;
+        this.stateTimer = 0;
+        this.stateDuration = 0.4; // Quick lunge
+        this.targetFacing = Math.atan2(playerX - this.posX, playerZ - this.posZ);
+    }
+
+    _updateAttack(dt, playerX, playerZ, distToPlayer) {
+        // Lunge toward player
+        const dx = playerX - this.posX;
+        const dz = playerZ - this.posZ;
+        const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+
+        const lungeSpeed = this.moveSpeed * this.fleeSpeed * 1.5 * dt;
+        if (dist > 1.0) {
+            this.posX += (dx / dist) * lungeSpeed;
+            this.posZ += (dz / dist) * lungeSpeed;
+        }
+
+        // Fast walk cycle (attack animation)
+        this.walkCycle = (this.walkCycle + dt * 12.0) % 1.0;
+        this.headBob = Math.sin(this.stateTimer * 20) * 0.1;
+
+        // Deal damage at the midpoint of the lunge
+        if (this.stateTimer >= this.stateDuration * 0.5 && !this._didAttack && distToPlayer < this.attackRange * 1.5) {
+            this._didAttack = true;
+            this._attackTimer = this.attackCooldown;
+        }
+
+        // Lunge complete → retreat
+        if (this.stateTimer >= this.stateDuration) {
+            this._enterRetreat(playerX, playerZ);
+        }
+    }
+
+    _enterRetreat(playerX, playerZ) {
+        this.state = CREATURE_STATE.RETREAT;
+        this.stateTimer = 0;
+        this.stateDuration = 1.5 + this._rng() * 1.5;
+
+        // Move away briefly
+        const dx = this.posX - playerX;
+        const dz = this.posZ - playerZ;
+        const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+        this.targetX = this.posX + (dx / dist) * 8;
+        this.targetZ = this.posZ + (dz / dist) * 8;
+        this.targetFacing = Math.atan2(dx, dz);
+    }
+
+    _updateRetreat(dt, playerX, playerZ, distToPlayer) {
+        const dx = this.targetX - this.posX;
+        const dz = this.targetZ - this.posZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        if (dist > 0.5) {
+            const speed = this.moveSpeed * 1.5 * dt;
+            this.posX += (dx / dist) * Math.min(speed, dist);
+            this.posZ += (dz / dist) * Math.min(speed, dist);
+        }
+
+        this.walkCycle = (this.walkCycle + dt * this.moveSpeed * 3.0) % 1.0;
+        this.headBob = Math.sin(this.walkCycle * Math.PI * 2) * 0.04;
+
+        // Retreat done → stalk again or go idle
+        if (this.stateTimer >= this.stateDuration) {
+            if (distToPlayer < this.aggroRange) {
+                this._enterStalk(playerX, playerZ);
+            } else {
+                this.state = CREATURE_STATE.IDLE;
+                this.stateTimer = 0;
+                this.stateDuration = 2.0 + this._rng() * 3.0;
+            }
+        }
+    }
+
+    // ============================================================
+    // PASSIVE STATE BEHAVIORS
     // ============================================================
 
     _updateIdle(dt) {

@@ -279,6 +279,12 @@ import { AudioManager } from './js/audio/AudioManager.js';
 // First-person view model
 import { FPSViewModel } from './js/ui/FPSViewModel.js';
 
+// Day/Night cycle
+import { DayNightCycle } from './js/rendering/DayNightCycle.js';
+
+// Survival stats
+import { SurvivalStats } from './js/ui/SurvivalStats.js';
+
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -578,6 +584,22 @@ camera.lookAt(0, 0, 0);
 // First-person view model (arm + multi-tool, visible on surface)
 const fpsViewModel = new FPSViewModel(camera);
 
+// Day/Night cycle — rotates sun, transitions sky colors, adjusts lighting
+const dayNightCycle = new DayNightCycle({ startTime: 0.35, cycleDuration: 480 });
+dayNightCycle.setPlanetMood(planetMood);
+
+// Survival stats — health, stamina, hazard protection
+const survivalStats = new SurvivalStats();
+survivalStats.setPlanetHazard(planetMood.band);
+survivalStats.onRespawn = () => {
+    // Respawn at ship position
+    if (shipModel && shipModel.group.visible) {
+        const sp = shipModel.group.position;
+        const groundH = terrainManager.getHeightAt(sp.x, sp.z) || 0;
+        walker.enable(new THREE.Vector3(sp.x + 3, groundH + 1.7, sp.z + 3));
+    }
+};
+
 // Finalize post-processing pipeline (needs camera + scene)
 composer.addPass(new RenderPass(scene, camera));
 
@@ -786,6 +808,11 @@ try {
         planetSeed: planetSeed,
         getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
         getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+        moodBand: planetMood.band,
+        onCreatureAttack: (damage, creatureName) => {
+            survivalStats.takeDamage(damage, 'creature');
+            audioManager.playSFX('mining_stop'); // hit sound
+        },
     });
 } catch (e) {
     console.warn('[TGO] Creature system disabled:', e.message);
@@ -997,6 +1024,7 @@ function transitionToPlanet(newRule, newSeed) {
     walker.disable();
     miningSystem.disable();
     fpsViewModel.hide();
+    survivalStats.hide();
     flightController.disable();
     weaponSystem.disable();
     scannerSystem.disable();
@@ -1037,11 +1065,20 @@ function transitionToPlanet(newRule, newSeed) {
     atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
     moodFogDensity = planetMood.atmosphere.fogDensity;
 
+    // ---- Update day/night cycle for new planet ----
+    dayNightCycle.setPlanetMood(planetMood);
+    dayNightCycle.timeOfDay = 0.35; // Fresh morning on new planet
+    dayNightCycle.update(0); // Compute initial values
+
+    // ---- Update survival stats for new planet hazard ----
+    survivalStats.setPlanetHazard(planetMood.band);
+    survivalStats.hazardProtection = survivalStats.maxHazardProtection;
+
     // ---- Update scene fog ----
     scene.fog.color.copy(fogColor);
     scene.fog.density = moodFogDensity;
 
-    // ---- Update sky dome ----
+    // ---- Update sky dome (day/night cycle will maintain these) ----
     skyDome.material.uniforms.uTopColor.value.copy(skyTopColor);
     skyDome.material.uniforms.uMidColor.value.copy(skyBottomColor);
     skyDome.material.uniforms.uBottomColor.value.copy(fogColor);
@@ -1120,6 +1157,11 @@ function transitionToPlanet(newRule, newSeed) {
             planetSeed: planetSeed,
             getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
             getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+            moodBand: planetMood.band,
+            onCreatureAttack: (damage, creatureName) => {
+                survivalStats.takeDamage(damage, 'creature');
+                audioManager.playSFX('mining_stop');
+            },
         });
     } catch (e) {
         console.warn('[TGO] Creature system recreation failed:', e.message);
@@ -1231,6 +1273,9 @@ function enterShip() {
     // Hide first-person view model in ship
     fpsViewModel.hide();
 
+    // Hide survival HUD in ship
+    survivalStats.hide();
+
     // Audio: switch to flight (engine + space ambience)
     audioManager.setPhase('flight');
     audioManager.playSFX('ui_open');
@@ -1267,6 +1312,9 @@ function exitShip() {
 
         // Show first-person view model
         fpsViewModel.show();
+
+        // Show survival HUD
+        survivalStats.show();
 
         // Audio: switch to surface ambience
         audioManager.setPhase('surface');
@@ -1476,6 +1524,14 @@ function updateDescent(dt) {
     terrainManager.update(camera.position, camera, dt);
     // Sky dome follows camera during descent too
     skyDome.update(camera.position, descentProgress * descentDuration);
+    // Day/night cycle during descent
+    dayNightCycle.update(dt);
+    dayNightCycle.applyToScene({
+        skyDome, sunLight, ambientLight, hemiLight,
+        fillLight, rimLight, fog: scene.fog,
+        atmospherePass, groundFillMat,
+    });
+    dayNightCycle.updateSunPosition(sunLight, camera.position);
     // Water waves animate during descent
     terrainManager.updateWater(descentProgress * descentDuration, camera.position);
     // Particles visible during descent
@@ -1545,6 +1601,9 @@ function onLanded() {
 
     // Show first-person view model (arm + multi-tool)
     fpsViewModel.show();
+
+    // Show survival HUD
+    survivalStats.show();
 
     // Spawn the Mysterious Being
     setTimeout(() => {
@@ -1684,18 +1743,28 @@ function animate() {
             tablet.setCoordinates(camera.position.x, camera.position.y, camera.position.z);
         }
 
-        // Sun follows player for consistent lighting + shadow coverage
-        sunLight.position.set(
-            camera.position.x + 100,
-            80,
-            camera.position.z + 60
-        );
-        sunLight.target.position.set(
-            camera.position.x,
-            0,
-            camera.position.z
-        );
-        sunLight.target.updateMatrixWorld();
+        // Day/night cycle — rotates sun, transitions sky/lighting
+        dayNightCycle.update(dt);
+        dayNightCycle.applyToScene({
+            skyDome, sunLight, ambientLight, hemiLight,
+            fillLight, rimLight, fog: scene.fog,
+            atmospherePass, groundFillMat,
+        });
+        dayNightCycle.updateSunPosition(sunLight, camera.position);
+
+        // Survival stats — health, stamina, hazard protection
+        survivalStats.update(dt, {
+            isSprinting: walker.isSprinting && survivalStats.canSprint(),
+            isGrounded: walker.isGrounded,
+            fallVelocity: walker.velocity.y,
+            isInShip: false,
+        });
+
+        // Prevent sprinting when stamina is empty
+        if (!survivalStats.canSprint()) {
+            walker.keys['ShiftLeft'] = false;
+            walker.keys['ShiftRight'] = false;
+        }
 
         // Check ship proximity (show "Press E" prompt)
         if (shipGrounded) {
@@ -1709,10 +1778,11 @@ function animate() {
 
         // HUD
         const info = walker.getHUDInfo();
+        const dnInfo = dayNightCycle.getHUDInfo();
         document.getElementById('altitudeValue').textContent =
             `${info.y}m`;
         document.getElementById('phaseInfo').textContent =
-            `X:${info.x} Z:${info.z} · ${info.speed}m/s${info.isSprinting ? ' · SPRINT' : ''}`;
+            `X:${info.x} Z:${info.z} · ${info.speed}m/s${info.isSprinting ? ' · SPRINT' : ''} · ${dnInfo.clock} ${dnInfo.phase}`;
     } else if (currentPhase === PHASE.FLIGHT || currentPhase === PHASE.GALAXY_MAP || currentPhase === PHASE.SYSTEM_VIEW) {
         // ---- FLIGHT / NAV PHASE ----
         // World keeps rolling even during galaxy map / system view
@@ -1737,10 +1807,14 @@ function animate() {
         groundFill.position.x = _shipWorldPos.x;
         groundFill.position.z = _shipWorldPos.z;
 
-        // Sun tracks position
-        sunLight.position.set(_shipWorldPos.x + 100, 80, _shipWorldPos.z + 60);
-        sunLight.target.position.set(_shipWorldPos.x, 0, _shipWorldPos.z);
-        sunLight.target.updateMatrixWorld();
+        // Day/night cycle — continues in flight
+        dayNightCycle.update(dt);
+        dayNightCycle.applyToScene({
+            skyDome, sunLight, ambientLight, hemiLight,
+            fillLight, rimLight, fog: scene.fog,
+            atmospherePass, groundFillMat,
+        });
+        dayNightCycle.updateSunPosition(sunLight, _shipWorldPos);
 
         // --- Flight-specific systems (only when actively piloting) ---
         if (currentPhase === PHASE.FLIGHT) {
@@ -1753,8 +1827,9 @@ function animate() {
 
             document.getElementById('altitudeValue').textContent =
                 `${flightInfo.altitude}m`;
+            const dnInfo2 = dayNightCycle.getHUDInfo();
             document.getElementById('phaseInfo').textContent =
-                `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'}`;
+                `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'} · ${dnInfo2.clock} ${dnInfo2.phase}`;
         }
     }
 
@@ -1869,6 +1944,8 @@ window._debug = {
     get galacticPos() { return { x: currentSystemX, y: currentSystemY }; },
     get audio() { return audioManager; },
     get viewModel() { return fpsViewModel; },
+    get dayNight() { return dayNightCycle; },
+    get survival() { return survivalStats; },
     warpTo: transitionToPlanet,
 };
 

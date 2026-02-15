@@ -32,6 +32,14 @@ const CREATURE_CONFIG = {
     speciesCount: 3,           // Species per planet
     spawnCheckInterval: 2.0,   // Seconds between spawn attempts
     fleeDistance: 7,           // Player proximity → flee
+    // Chance a creature is hostile, by mood band
+    hostileChance: {
+        delta: 0.0,   // Dreamlike — all peaceful
+        theta: 0.05,  // Mysterious — rare hostiles
+        alpha: 0.0,   // Calm — peaceful
+        beta: 0.2,    // Energetic — some hostile
+        gamma: 0.5,   // Intense — many hostile
+    },
     biomeDensity: {            // Creatures per biome
         2: 0.1,   // Beach
         3: 0.2,   // Desert
@@ -81,6 +89,10 @@ export class CreatureSystem {
         this.planetSeed = options.planetSeed || 42;
         this.getHeightAt = options.getHeightAt || (() => 0);
         this.getBiomeAt = options.getBiomeAt || (() => 5); // Default: grassland
+        this.moodBand = options.moodBand || 'alpha';
+
+        // Callback when a hostile creature attacks
+        this.onCreatureAttack = options.onCreatureAttack || null;
 
         // Generate species templates for this planet
         this.speciesTemplates = generatePlanetCreatures(
@@ -116,6 +128,11 @@ export class CreatureSystem {
 
             // Update AI
             const aiState = creature.ai.update(dt, playerX, playerZ);
+
+            // Check for attack damage
+            if (aiState.didAttack && this.onCreatureAttack) {
+                this.onCreatureAttack(aiState.attackDamage, creature.species.archetype?.name || 'creature');
+            }
 
             // Get terrain height at new position
             const groundY = this.getHeightAt(aiState.x, aiState.z);
@@ -215,6 +232,10 @@ export class CreatureSystem {
             mesh.rotation.y = rng() * Math.PI * 2;
             this.scene.add(mesh);
 
+            // Determine hostility based on planet mood
+            const hostileChance = CREATURE_CONFIG.hostileChance[this.moodBand] || 0;
+            const isHostile = rng() < hostileChance;
+
             // Create AI
             const ai = new CreatureAI({
                 moveSpeed: species.animParams.moveSpeed,
@@ -223,8 +244,23 @@ export class CreatureSystem {
                 fleeSpeed: 2.0,
                 wanderRadius: 15 + rng() * 15,
                 seed: seed,
+                hostile: isHostile,
+                attackDamage: isHostile ? 6 + Math.floor(rng() * 8) : 0,
+                aggroRange: 15,
+                attackRange: 3,
             });
             ai.setPosition(spawnX, spawnZ);
+
+            // Hostile creatures get a red tint
+            if (isHostile) {
+                mesh.traverse(child => {
+                    if (child.isMesh && child.material) {
+                        child.material = child.material.clone();
+                        child.material.color.lerp(new THREE.Color(0.8, 0.15, 0.1), 0.35);
+                        child.material.emissive = new THREE.Color(0.3, 0.02, 0.02);
+                    }
+                });
+            }
 
             const instance = new CreatureInstance(species, mesh, ai, seed);
             instance.groundY = groundY;
