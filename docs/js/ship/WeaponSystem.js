@@ -56,6 +56,7 @@ export class WeaponSystem {
         this.currentWeapon = 'laser'; // 'laser' or 'rocket'
         this.cooldownTimer = 0;
         this.isFiring = false;
+        this.onFire = null; // Audio callback
 
         // Laser beams (pool)
         this.laserBeams = [];
@@ -185,6 +186,7 @@ export class WeaponSystem {
             this._fireRocket();
         }
 
+        if (this.onFire) this.onFire();
         this.cooldownTimer = this.config[this.currentWeapon].cooldown;
 
         // Muzzle flash

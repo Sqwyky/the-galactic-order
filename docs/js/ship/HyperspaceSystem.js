@@ -34,6 +34,10 @@ export class HyperspaceSystem {
         // Seamless transition callback — called instead of page redirect
         this.onJump = null;
 
+        // Audio hooks (optional)
+        this.onChargeStart = null;
+        this.onChargeCancel = null;
+
         // Visual overlay
         this.overlay = this._createOverlay();
         document.body.appendChild(this.overlay);
@@ -92,6 +96,7 @@ export class HyperspaceSystem {
             if (!this.isCharging) {
                 this.isCharging = true;
                 this.chargeProgress = 0;
+                if (this.onChargeStart) this.onChargeStart();
             }
 
             this.chargeProgress += dt / this.chargeDuration;
@@ -151,6 +156,7 @@ export class HyperspaceSystem {
         this.chargeProgress = 0;
         this.overlay.style.opacity = '0';
         this.starLines.visible = false;
+        if (this.onChargeCancel) this.onChargeCancel();
     }
 
     _executeJump() {

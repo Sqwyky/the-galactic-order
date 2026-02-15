@@ -22,6 +22,7 @@ export class ScannerSystem {
 
         // State
         this.isScanning = false;
+        this.onScan = null; // Audio callback
         this.scanProgress = 0; // 0 to 1
         this.cooldownTimer = 0;
         this.scanCooldown = 5.0; // seconds
@@ -57,6 +58,7 @@ export class ScannerSystem {
         this.isScanning = true;
         this.scanProgress = 0;
         this.cooldownTimer = this.scanCooldown;
+        if (this.onScan) this.onScan();
 
         // Create expanding sphere pulse
         const geo = new THREE.SphereGeometry(1, 32, 16);
