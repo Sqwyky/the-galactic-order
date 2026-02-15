@@ -1605,61 +1605,49 @@ function animate() {
             `${info.y}m`;
         document.getElementById('phaseInfo').textContent =
             `X:${info.x} Z:${info.z} · ${info.speed}m/s${info.isSprinting ? ' · SPRINT' : ''}`;
-    } else if (currentPhase === PHASE.FLIGHT) {
-        // ---- FLIGHT PHASE ----
-        flightController.update(dt);
+    } else if (currentPhase === PHASE.FLIGHT || currentPhase === PHASE.GALAXY_MAP || currentPhase === PHASE.SYSTEM_VIEW) {
+        // ---- FLIGHT / NAV PHASE ----
+        // World keeps rolling even during galaxy map / system view
+        // (the game is always online — the universe doesn't pause)
 
-        // Get ship world position for all terrain/rendering systems
-        flightController.getWorldPosition(_shipWorldPos);
+        if (currentPhase === PHASE.FLIGHT) {
+            flightController.update(dt);
+            flightController.getWorldPosition(_shipWorldPos);
+        } else {
+            // Ship parked — use last known position for world updates
+            _shipWorldPos.copy(shipModel.group.position);
+        }
 
-        // Terrain keeps generating around ship
+        // --- World always updates (terrain, sky, water, life) ---
         terrainManager.update(_shipWorldPos, camera, dt);
-
-        // Sky dome follows ship
         skyDome.update(_shipWorldPos, t);
-
-        // Vegetation + environment around ship
         grassSystem.update(terrainManager.chunks, _shipWorldPos, t);
         rockScatter.update(terrainManager.chunks, _shipWorldPos);
         alienFlora.update(terrainManager.chunks, _shipWorldPos, t);
-
-        // Water
         terrainManager.updateWater(t, _shipWorldPos);
-
-        // Particles
         atmosphericParticles.update(_shipWorldPos, t);
-
-        // Ground fill
         groundFill.position.x = _shipWorldPos.x;
         groundFill.position.z = _shipWorldPos.z;
 
-        // Weapons
-        weaponSystem.update(dt);
-
-        // Scanner
-        scannerSystem.update(dt, _shipWorldPos);
-
-        // Hyperspace
-        const flightInfo = flightController.getHUDInfo();
-        hyperspaceSystem.update(dt, flightInfo.altitude);
-
-        // Sun follows ship (shadow camera tracks too)
-        sunLight.position.set(
-            _shipWorldPos.x + 100,
-            80,
-            _shipWorldPos.z + 60
-        );
+        // Sun tracks position
+        sunLight.position.set(_shipWorldPos.x + 100, 80, _shipWorldPos.z + 60);
         sunLight.target.position.set(_shipWorldPos.x, 0, _shipWorldPos.z);
         sunLight.target.updateMatrixWorld();
 
-        // Ship HUD
-        shipHUD.update(flightInfo, weaponSystem.getHUDInfo());
+        // --- Flight-specific systems (only when actively piloting) ---
+        if (currentPhase === PHASE.FLIGHT) {
+            weaponSystem.update(dt);
+            scannerSystem.update(dt, _shipWorldPos);
 
-        // Walking-mode HUD shows flight stats
-        document.getElementById('altitudeValue').textContent =
-            `${flightInfo.altitude}m`;
-        document.getElementById('phaseInfo').textContent =
-            `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'}`;
+            const flightInfo = flightController.getHUDInfo();
+            hyperspaceSystem.update(dt, flightInfo.altitude);
+            shipHUD.update(flightInfo, weaponSystem.getHUDInfo());
+
+            document.getElementById('altitudeValue').textContent =
+                `${flightInfo.altitude}m`;
+            document.getElementById('phaseInfo').textContent =
+                `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'}`;
+        }
     }
 
     // Update film grain time uniform (animated noise pattern each frame)

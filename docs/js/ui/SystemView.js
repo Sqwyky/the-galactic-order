@@ -1,22 +1,35 @@
 /**
- * THE GALACTIC ORDER - System View
+ * THE GALACTIC ORDER - System View Terminal
  *
- * A 3D canvas overlay that shows a star system's planets orbiting
- * their star. The player selects a planet to warp to.
+ * A 3D system view displayed on the ship's navigation terminal —
+ * green phosphor CRT aesthetic with scanlines over a semi-transparent
+ * background so the game world stays visible behind.
  *
  * Flow:
- *   [Galaxy Map] → player clicks star → System View opens
+ *   [Galaxy Map] → player clicks star → System View terminal opens
  *   [System View] → player clicks planet → warp initiated
  *
  * Renders using a dedicated Three.js scene overlaid on the game.
  * Shows: central star (glowing sphere), orbiting ghost planets
  * (colored by archetype), orbit paths, planet info on hover.
  *
- * Uses the ghost planet data from UniverseManager — deterministic,
- * so every player sees the same system layout.
+ * The game world keeps rendering behind this terminal.
  */
 
 import * as THREE from 'three';
+
+// Terminal green palette (shared with GalaxyMap)
+const TERM = {
+    green: '#00ff88',
+    greenDim: '#008844',
+    greenGlow: 'rgba(0, 255, 136, 0.3)',
+    greenText: '#00dd77',
+    amber: '#ffaa33',
+    bg: 'rgba(0, 4, 2, 0.78)',
+    border: 'rgba(0, 255, 136, 0.25)',
+    panelBg: 'rgba(0, 8, 4, 0.92)',
+    dimText: '#226644',
+};
 
 // ============================================================
 // SYSTEM VIEW
@@ -27,6 +40,7 @@ export class SystemView {
      * @param {Object} options
      * @param {Function} options.onPlanetSelected - Called when player picks a planet
      * @param {Function} options.onBack - Called when player goes back to galaxy map
+     * @param {Function} options.onCancel - Called when player presses ESC
      */
     constructor(options = {}) {
         this.onPlanetSelected = options.onPlanetSelected || null;
@@ -73,70 +87,109 @@ export class SystemView {
     }
 
     _build() {
-        // Container
+        // Container — semi-transparent so game world shows through
         this.container = document.createElement('div');
         this.container.id = 'system-view';
         this.container.style.cssText = `
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             z-index: 50; display: none;
-            background: #000;
+            background: ${TERM.bg};
+            border: 1px solid ${TERM.border};
             transition: opacity 0.5s;
             opacity: 0;
             cursor: crosshair;
         `;
 
-        // System label
+        // Scanline overlay (CRT effect)
+        const scanlines = document.createElement('div');
+        scanlines.style.cssText = `
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.06) 2px,
+                rgba(0, 0, 0, 0.06) 4px
+            );
+            pointer-events: none;
+            z-index: 10;
+        `;
+        this.container.appendChild(scanlines);
+
+        // Terminal frame glow (top + bottom green lines)
+        const topLine = document.createElement('div');
+        topLine.style.cssText = `
+            position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, ${TERM.green}, transparent);
+            opacity: 0.4; pointer-events: none; z-index: 11;
+        `;
+        this.container.appendChild(topLine);
+        const bottomLine = document.createElement('div');
+        bottomLine.style.cssText = `
+            position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, ${TERM.green}, transparent);
+            opacity: 0.4; pointer-events: none; z-index: 11;
+        `;
+        this.container.appendChild(bottomLine);
+
+        // System label — green terminal header
         this.systemLabel = document.createElement('div');
         this.systemLabel.style.cssText = `
-            position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
-            color: #88ccff; font-family: 'Courier New', monospace;
-            font-size: 14px; letter-spacing: 6px;
-            text-shadow: 0 0 20px rgba(100,180,255,0.3);
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            color: ${TERM.green}; font-family: 'Courier New', monospace;
+            font-size: 13px; letter-spacing: 6px;
+            text-shadow: 0 0 15px ${TERM.greenGlow}, 0 0 30px rgba(0,255,136,0.1);
             pointer-events: none; text-align: center;
+            z-index: 11;
         `;
         this.container.appendChild(this.systemLabel);
 
-        // Info panel
+        // Info panel — green terminal card
         this.infoPanel = document.createElement('div');
         this.infoPanel.style.cssText = `
             position: absolute; display: none;
-            background: rgba(10, 15, 30, 0.9);
-            border: 1px solid rgba(100, 180, 255, 0.2);
-            padding: 12px 16px;
+            background: ${TERM.panelBg};
+            border: 1px solid ${TERM.border};
+            padding: 10px 14px;
             font-family: 'Courier New', monospace;
-            font-size: 11px; color: #aabbcc;
+            font-size: 10px; color: ${TERM.greenText};
             pointer-events: none; min-width: 200px;
+            box-shadow: 0 0 15px rgba(0,255,136,0.08);
+            z-index: 12;
         `;
         this.container.appendChild(this.infoPanel);
 
-        // Controls hint
+        // Controls hint — dim green
         const hint = document.createElement('div');
         hint.style.cssText = `
-            position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
-            color: #445; font-family: 'Courier New', monospace;
-            font-size: 10px; letter-spacing: 2px; text-align: center;
-            pointer-events: none;
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            color: ${TERM.dimText}; font-family: 'Courier New', monospace;
+            font-size: 9px; letter-spacing: 2px; text-align: center;
+            pointer-events: none; z-index: 11;
         `;
-        hint.innerHTML = 'CLICK PLANET TO WARP · SCROLL TO ZOOM · BACKSPACE TO RETURN · ESC TO CANCEL';
+        hint.innerHTML = 'SELECT PLANET &middot; SCROLL ZOOM &middot; BACKSPACE RETURN &middot; ESC CANCEL';
         this.container.appendChild(hint);
 
-        // Back button
+        // Back button — green terminal style
         const backBtn = document.createElement('div');
         backBtn.style.cssText = `
-            position: absolute; top: 24px; left: 24px;
-            color: #556; font-family: 'Courier New', monospace;
-            font-size: 11px; letter-spacing: 2px; cursor: pointer;
-            padding: 4px 8px; border: 1px solid rgba(80,100,130,0.3);
-            transition: color 0.2s, border-color 0.2s;
+            position: absolute; top: 20px; left: 20px;
+            color: ${TERM.dimText}; font-family: 'Courier New', monospace;
+            font-size: 10px; letter-spacing: 2px; cursor: pointer;
+            padding: 4px 8px; border: 1px solid ${TERM.border};
+            transition: color 0.2s, border-color 0.2s, text-shadow 0.2s;
+            z-index: 11;
         `;
         backBtn.textContent = '< GALAXY MAP';
         backBtn.addEventListener('mouseenter', () => {
-            backBtn.style.color = '#88ccff';
-            backBtn.style.borderColor = 'rgba(100,180,255,0.5)';
+            backBtn.style.color = TERM.green;
+            backBtn.style.borderColor = TERM.green;
+            backBtn.style.textShadow = `0 0 10px ${TERM.greenGlow}`;
         });
         backBtn.addEventListener('mouseleave', () => {
-            backBtn.style.color = '#556';
-            backBtn.style.borderColor = 'rgba(80,100,130,0.3)';
+            backBtn.style.color = TERM.dimText;
+            backBtn.style.borderColor = TERM.border;
+            backBtn.style.textShadow = 'none';
         });
         backBtn.addEventListener('click', () => {
             this.close();
@@ -151,10 +204,6 @@ export class SystemView {
     // OPEN / CLOSE
     // ============================================================
 
-    /**
-     * Open the system view for a given star system.
-     * @param {Object} systemData - From UniverseManager.generateStarSystem()
-     */
     open(systemData) {
         this.systemData = systemData;
         this.hoveredPlanet = null;
@@ -163,10 +212,10 @@ export class SystemView {
         this.cameraTargetDistance = 40;
         this.cameraDistance = 40;
 
-        // Update label
+        // Update label — green terminal style
         this.systemLabel.innerHTML =
-            `${systemData.star.name.toUpperCase()}` +
-            `<div style="font-size: 9px; color: #556; margin-top: 4px; letter-spacing: 2px;">` +
+            `[ ${systemData.star.name.toUpperCase()} ]` +
+            `<div style="font-size: 9px; color: ${TERM.dimText}; margin-top: 4px; letter-spacing: 2px;">` +
             `${systemData.star.type.name} · ${systemData.planetCount} PLANETS · ` +
             `[${systemData.coordinates.x}, ${systemData.coordinates.y}]</div>`;
 
@@ -216,29 +265,27 @@ export class SystemView {
     // ============================================================
 
     _createScene(systemData) {
-        // Dispose existing
         this._disposeScene();
 
-        // Scene
         this.scene = new THREE.Scene();
 
-        // Camera
         this.camera = new THREE.PerspectiveCamera(
             60, window.innerWidth / window.innerHeight, 0.1, 500
         );
 
-        // Renderer
+        // Renderer — alpha:true so background shows through
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.setClearColor(0x000000, 0); // Transparent clear
 
-        // Insert canvas into container (before info panel)
+        // Insert canvas into container (before other elements)
         this.container.insertBefore(this.renderer.domElement, this.container.firstChild);
-        this.renderer.domElement.style.cssText = 'position: absolute; top: 0; left: 0;';
+        this.renderer.domElement.style.cssText = 'position: absolute; top: 0; left: 0; z-index: 1;';
 
-        // Lighting
-        const ambient = new THREE.AmbientLight(0x111122, 0.5);
+        // Lighting — green-tinted ambient
+        const ambient = new THREE.AmbientLight(0x002211, 0.3);
         this.scene.add(ambient);
 
         // Star
@@ -249,7 +296,7 @@ export class SystemView {
             starType.color[2] / 255
         );
 
-        // Star mesh (glowing sphere)
+        // Star mesh
         const starGeo = new THREE.SphereGeometry(starType.size * 1.5, 32, 32);
         const starMat = new THREE.MeshBasicMaterial({
             color: starColor,
@@ -304,7 +351,6 @@ export class SystemView {
             const color = ARCHETYPE_COLORS[ghost.archetype?.name] || 0x888888;
             const planetSize = Math.max(0.3, ghost.size * 0.5);
 
-            // Planet sphere
             const geo = new THREE.SphereGeometry(planetSize, 16, 16);
             const mat = new THREE.MeshStandardMaterial({
                 color,
@@ -315,23 +361,23 @@ export class SystemView {
             const mesh = new THREE.Mesh(geo, mat);
             this.scene.add(mesh);
 
-            // Orbit ring
+            // Orbit ring — green-tinted
             const orbitGeo = new THREE.RingGeometry(
                 ghost.orbitRadius - 0.02,
                 ghost.orbitRadius + 0.02,
                 128
             );
             const orbitMat = new THREE.MeshBasicMaterial({
-                color: 0x334466,
+                color: 0x004422,
                 side: THREE.DoubleSide,
                 transparent: true,
-                opacity: 0.15,
+                opacity: 0.2,
             });
             const orbitLine = new THREE.Mesh(orbitGeo, orbitMat);
             orbitLine.rotation.x = -Math.PI / 2;
             this.scene.add(orbitLine);
 
-            // Rings (if the planet has them)
+            // Rings
             let ringMesh = null;
             if (ghost.hasRings) {
                 const ringGeo = new THREE.RingGeometry(
@@ -356,17 +402,17 @@ export class SystemView {
             });
         }
 
-        // Background stars
+        // Background stars (fewer, dimmer — terminal transparency handles the rest)
         const bgStarGeo = new THREE.BufferGeometry();
-        const bgStarPositions = new Float32Array(500 * 3);
-        for (let i = 0; i < 500; i++) {
+        const bgStarPositions = new Float32Array(300 * 3);
+        for (let i = 0; i < 300; i++) {
             bgStarPositions[i * 3] = (Math.random() - 0.5) * 400;
             bgStarPositions[i * 3 + 1] = (Math.random() - 0.5) * 400;
             bgStarPositions[i * 3 + 2] = (Math.random() - 0.5) * 400;
         }
         bgStarGeo.setAttribute('position', new THREE.BufferAttribute(bgStarPositions, 3));
         const bgStarMat = new THREE.PointsMaterial({
-            color: 0xffffff, size: 0.3, transparent: true, opacity: 0.4,
+            color: 0x00ff88, size: 0.2, transparent: true, opacity: 0.15,
         });
         this.scene.add(new THREE.Points(bgStarGeo, bgStarMat));
     }
@@ -448,14 +494,12 @@ export class SystemView {
             -((e.clientY - rect.top) / rect.height) * 2 + 1
         );
 
-        // Raycast against planets
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, this.camera);
 
         this.hoveredPlanet = null;
 
         for (const { mesh, ghost } of this.planetMeshes) {
-            // Use a slightly larger bounding sphere for easier selection
             const planetPos = mesh.position.clone();
             const dist = raycaster.ray.distanceToPoint(planetPos);
 
@@ -465,37 +509,35 @@ export class SystemView {
             }
         }
 
-        // Update cursor and info panel
+        // Update cursor and info panel — green terminal style
         if (this.hoveredPlanet) {
             this.container.style.cursor = 'pointer';
             const ghost = this.hoveredPlanet.ghost;
 
-            // Highlight the planet
             this.hoveredPlanet.mesh.material.emissiveIntensity = 0.5;
 
             this.infoPanel.style.display = 'block';
             this.infoPanel.style.left = (e.clientX + 20) + 'px';
             this.infoPanel.style.top = (e.clientY - 10) + 'px';
             this.infoPanel.innerHTML = `
-                <div style="color: #88ccff; font-size: 13px; margin-bottom: 6px;">
+                <div style="color: ${TERM.green}; font-size: 12px; margin-bottom: 4px; text-shadow: 0 0 8px ${TERM.greenGlow};">
                     ${ghost.name}
                 </div>
-                <div style="color: #556; font-size: 9px; margin-bottom: 8px; letter-spacing: 1px;">
+                <div style="color: ${TERM.dimText}; font-size: 9px; margin-bottom: 6px; letter-spacing: 1px;">
                     ${ghost.archetype?.name || 'Unknown'} · ${ghost.ruleLabel}
                 </div>
-                <div>Rule: <span style="color: #88ccff">${ghost.rule}</span> (Class ${ghost.ruleClass})</div>
-                <div>Size: <span style="color: #88ccff">${ghost.size.toFixed(1)}</span></div>
-                <div>Orbit: <span style="color: #88ccff">${ghost.orbitRadius.toFixed(1)} AU</span></div>
-                ${ghost.hasRings ? '<div style="color: #aa88cc;">Has ring system</div>' : ''}
-                ${ghost.moonCount > 0 ? `<div>Moons: <span style="color: #88ccff">${ghost.moonCount}</span></div>` : ''}
-                ${ghost.isGasGiant ? '<div style="color: #ffaa44;">Gas giant (no landing)</div>' : ''}
-                ${!ghost.isGasGiant ? '<div style="color: #00ff88; margin-top: 8px; font-size: 9px;">CLICK TO WARP</div>' : ''}
+                <div>Rule: <span style="color: ${TERM.green}">${ghost.rule}</span> (Class ${ghost.ruleClass})</div>
+                <div>Size: <span style="color: ${TERM.green}">${ghost.size.toFixed(1)}</span></div>
+                <div>Orbit: <span style="color: ${TERM.green}">${ghost.orbitRadius.toFixed(1)} AU</span></div>
+                ${ghost.hasRings ? `<div style="color: ${TERM.amber};">Has ring system</div>` : ''}
+                ${ghost.moonCount > 0 ? `<div>Moons: <span style="color: ${TERM.green}">${ghost.moonCount}</span></div>` : ''}
+                ${ghost.isGasGiant ? `<div style="color: ${TERM.amber};">Gas giant (no landing)</div>` : ''}
+                ${!ghost.isGasGiant ? `<div style="color: ${TERM.green}; margin-top: 6px; font-size: 9px;">> WARP</div>` : ''}
             `;
         } else {
             this.container.style.cursor = 'crosshair';
             this.infoPanel.style.display = 'none';
 
-            // Reset all planet emissives
             for (const { mesh } of this.planetMeshes) {
                 mesh.material.emissiveIntensity = 0.1;
             }
@@ -506,7 +548,6 @@ export class SystemView {
         if (this.hoveredPlanet && !this.hoveredPlanet.ghost.isGasGiant) {
             this.selectedPlanet = this.hoveredPlanet.ghost;
 
-            // Notify game
             if (this.onPlanetSelected) {
                 this.onPlanetSelected(this.selectedPlanet, this.systemData);
             }

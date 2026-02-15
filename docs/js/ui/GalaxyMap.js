@@ -1,25 +1,38 @@
 /**
- * THE GALACTIC ORDER - Galaxy Map
+ * THE GALACTIC ORDER - Galaxy Map Terminal
  *
- * A 2D/canvas-based star map overlay that appears when the player
- * initiates a hyperspace jump. Shows nearby star systems as points
- * of light, with names, types, and distances.
+ * A 2D/canvas-based star map displayed on the ship's navigation
+ * terminal — green phosphor CRT aesthetic with scanlines.
  *
  * Flow:
- *   [Player charges hyperspace] → Galaxy Map opens
- *   [Player clicks a star]      → System View opens (3D orbiting planets)
+ *   [Player charges hyperspace] → Galaxy Map terminal opens
+ *   [Player clicks a star]      → System View terminal opens
  *   [Player clicks a planet]    → Warp to that planet (DESCENT phase)
  *
  * The map is generated from UniverseManager.getNearbySystems(),
  * which deterministically places stars based on the Genesis Seed.
  * Every fork sees the same galaxy. Every player visits the same stars.
  *
- * Visual style: Dark space, glowing star dots, connecting lines for
- * nearby systems, NMS-style hover cards with system info.
+ * The game world keeps rendering behind the semi-transparent terminal.
  */
 
 import { UniverseManager, STAR_TYPES } from '../universe/UniverseManager.js';
 import { hashFloat } from '../generation/hashSeed.js';
+
+// Terminal green palette
+const TERM = {
+    green: '#00ff88',
+    greenDim: '#008844',
+    greenFaint: 'rgba(0, 255, 136, 0.15)',
+    greenGlow: 'rgba(0, 255, 136, 0.3)',
+    greenText: '#00dd77',
+    amber: '#ffaa33',
+    bg: 'rgba(0, 4, 2, 0.82)',
+    border: 'rgba(0, 255, 136, 0.25)',
+    borderBright: 'rgba(0, 255, 136, 0.5)',
+    panelBg: 'rgba(0, 8, 4, 0.92)',
+    dimText: '#226644',
+};
 
 // ============================================================
 // GALAXY MAP
@@ -29,6 +42,7 @@ export class GalaxyMap {
     /**
      * @param {Object} options
      * @param {Function} options.onSystemSelected - Called when player picks a system
+     * @param {Function} options.onCancel - Called when player presses ESC
      * @param {number} [options.viewRadius=8] - How many grid cells to show
      */
     constructor(options = {}) {
@@ -83,72 +97,108 @@ export class GalaxyMap {
     }
 
     // ============================================================
-    // DOM CONSTRUCTION
+    // DOM CONSTRUCTION — Green Terminal Aesthetic
     // ============================================================
 
     _build() {
-        // Container overlay
+        // Container overlay — semi-transparent so game world shows through
         this.container = document.createElement('div');
         this.container.id = 'galaxy-map';
         this.container.style.cssText = `
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             z-index: 50; display: none;
-            background: rgba(0, 0, 0, 0.95);
+            background: ${TERM.bg};
+            border: 1px solid ${TERM.border};
             transition: opacity 0.5s;
             opacity: 0;
             cursor: crosshair;
         `;
 
+        // Scanline overlay (CRT effect)
+        const scanlines = document.createElement('div');
+        scanlines.style.cssText = `
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.08) 2px,
+                rgba(0, 0, 0, 0.08) 4px
+            );
+            pointer-events: none;
+            z-index: 2;
+        `;
+        this.container.appendChild(scanlines);
+
+        // Terminal frame glow (top + bottom green lines)
+        const topLine = document.createElement('div');
+        topLine.style.cssText = `
+            position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, ${TERM.green}, transparent);
+            opacity: 0.4; pointer-events: none; z-index: 3;
+        `;
+        this.container.appendChild(topLine);
+        const bottomLine = document.createElement('div');
+        bottomLine.style.cssText = `
+            position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, ${TERM.green}, transparent);
+            opacity: 0.4; pointer-events: none; z-index: 3;
+        `;
+        this.container.appendChild(bottomLine);
+
         // Canvas for star rendering
         this.canvas = document.createElement('canvas');
-        this.canvas.style.cssText = 'width: 100%; height: 100%;';
+        this.canvas.style.cssText = 'width: 100%; height: 100%; position: relative; z-index: 1;';
         this.container.appendChild(this.canvas);
 
-        // Title
+        // Title — green terminal header
         const title = document.createElement('div');
         title.style.cssText = `
-            position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
-            color: #88ccff; font-family: 'Courier New', monospace;
-            font-size: 14px; letter-spacing: 6px;
-            text-shadow: 0 0 20px rgba(100,180,255,0.3);
-            pointer-events: none;
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            color: ${TERM.green}; font-family: 'Courier New', monospace;
+            font-size: 13px; letter-spacing: 6px;
+            text-shadow: 0 0 15px ${TERM.greenGlow}, 0 0 30px rgba(0,255,136,0.1);
+            pointer-events: none; z-index: 3;
         `;
-        title.textContent = 'GALACTIC NAVIGATION';
+        title.textContent = '[ GALACTIC NAVIGATION ]';
         this.container.appendChild(title);
 
-        // Controls hint
+        // Controls hint — dim green
         const hint = document.createElement('div');
         hint.style.cssText = `
-            position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
-            color: #445; font-family: 'Courier New', monospace;
-            font-size: 10px; letter-spacing: 2px; text-align: center;
-            pointer-events: none;
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            color: ${TERM.dimText}; font-family: 'Courier New', monospace;
+            font-size: 9px; letter-spacing: 2px; text-align: center;
+            pointer-events: none; z-index: 3;
         `;
-        hint.innerHTML = 'CLICK STAR TO SELECT · SCROLL TO ZOOM · DRAG TO PAN · ESC TO CANCEL';
+        hint.innerHTML = 'SELECT STAR &middot; SCROLL ZOOM &middot; DRAG PAN &middot; ESC CANCEL';
         this.container.appendChild(hint);
 
-        // Info panel (shows on hover)
+        // Info panel (shows on hover) — green terminal card
         this.infoPanel = document.createElement('div');
         this.infoPanel.style.cssText = `
             position: absolute; display: none;
-            background: rgba(10, 15, 30, 0.9);
-            border: 1px solid rgba(100, 180, 255, 0.2);
-            padding: 12px 16px;
+            background: ${TERM.panelBg};
+            border: 1px solid ${TERM.border};
+            padding: 10px 14px;
             font-family: 'Courier New', monospace;
-            font-size: 11px;
-            color: #aabbcc;
+            font-size: 10px;
+            color: ${TERM.greenText};
             pointer-events: none;
             min-width: 180px;
+            box-shadow: 0 0 15px rgba(0,255,136,0.08);
+            z-index: 4;
         `;
         this.container.appendChild(this.infoPanel);
 
         // Current system indicator
         this.currentLabel = document.createElement('div');
         this.currentLabel.style.cssText = `
-            position: absolute; top: 60px; left: 24px;
-            color: #00ff88; font-family: 'Courier New', monospace;
-            font-size: 11px; letter-spacing: 1px;
-            pointer-events: none;
+            position: absolute; top: 52px; left: 20px;
+            color: ${TERM.green}; font-family: 'Courier New', monospace;
+            font-size: 10px; letter-spacing: 1px;
+            text-shadow: 0 0 8px ${TERM.greenGlow};
+            pointer-events: none; z-index: 3;
         `;
         this.container.appendChild(this.currentLabel);
 
@@ -186,8 +236,8 @@ export class GalaxyMap {
         // Update current system label
         const currentSystem = this.universe.getSystem(currentX, currentY);
         this.currentLabel.innerHTML =
-            `CURRENT: <span style="color:#88ccff">${currentSystem.star.name}</span> ` +
-            `<span style="color:#446">[${currentX}, ${currentY}]</span>`;
+            `> CURRENT: <span style="color:${TERM.green}">${currentSystem.star.name}</span> ` +
+            `<span style="color:${TERM.dimText}">[${currentX}, ${currentY}]</span>`;
 
         // Show
         this.isOpen = true;
@@ -238,9 +288,6 @@ export class GalaxyMap {
     // COORDINATE TRANSFORMS
     // ============================================================
 
-    /**
-     * Convert galactic coordinates to screen coordinates.
-     */
     galaxyToScreen(gx, gy) {
         const cx = this.canvas.width / 2;
         const cy = this.canvas.height / 2;
@@ -255,9 +302,6 @@ export class GalaxyMap {
         };
     }
 
-    /**
-     * Convert screen coordinates to galactic coordinates.
-     */
     screenToGalaxy(sx, sy) {
         const cx = this.canvas.width / 2;
         const cy = this.canvas.height / 2;
@@ -270,7 +314,7 @@ export class GalaxyMap {
     }
 
     // ============================================================
-    // RENDERING
+    // RENDERING — Green phosphor CRT aesthetic
     // ============================================================
 
     _animate() {
@@ -289,14 +333,13 @@ export class GalaxyMap {
         const w = this.canvas.width;
         const h = this.canvas.height;
 
-        // Clear
-        ctx.fillStyle = 'rgba(2, 3, 8, 1)';
-        ctx.fillRect(0, 0, w, h);
+        // Clear — semi-transparent dark so game world bleeds through
+        ctx.clearRect(0, 0, w, h);
 
-        // Background stars (static distant stars)
+        // Background stars (static distant stars — green-tinted)
         this._drawBackgroundStars(ctx, w, h);
 
-        // Grid lines (subtle)
+        // Grid lines (green)
         this._drawGrid(ctx, w, h);
 
         // Connection lines between nearby systems
@@ -320,22 +363,26 @@ export class GalaxyMap {
             ctx.arc(pos.x, pos.y, 18, 0, Math.PI * 2);
             ctx.stroke();
         }
+
+        // Terminal frame corners
+        this._drawTerminalFrame(ctx, w, h);
     }
 
     _drawBackgroundStars(ctx, w, h) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-        // Deterministic background stars
+        // Green-tinted background stars (phosphor dots)
         for (let i = 0; i < 200; i++) {
             const x = (hashFloat('bg_star', i, 'x') * w);
             const y = (hashFloat('bg_star', i, 'y') * h);
-            const size = hashFloat('bg_star', i, 'size') < 0.9 ? 0.5 : 1;
+            const bright = hashFloat('bg_star', i, 'size');
+            const size = bright < 0.9 ? 0.5 : 1;
+            ctx.fillStyle = `rgba(0, 255, 136, ${0.06 + bright * 0.08})`;
             ctx.fillRect(x, y, size, size);
         }
     }
 
     _drawGrid(ctx, w, h) {
         const scale = 60 * this.zoom;
-        ctx.strokeStyle = 'rgba(40, 60, 100, 0.08)';
+        ctx.strokeStyle = 'rgba(0, 255, 136, 0.04)';
         ctx.lineWidth = 0.5;
 
         // Vertical lines
@@ -362,7 +409,7 @@ export class GalaxyMap {
     }
 
     _drawConnections(ctx) {
-        ctx.strokeStyle = 'rgba(60, 100, 180, 0.06)';
+        ctx.strokeStyle = 'rgba(0, 255, 136, 0.04)';
         ctx.lineWidth = 0.5;
 
         for (let i = 0; i < this.systems.length; i++) {
@@ -392,7 +439,7 @@ export class GalaxyMap {
         const isCurrent = (x === this.playerX && y === this.playerY);
         const pulse = Math.sin(this._animTime * 2 + x * 3 + y * 7) * 0.2 + 0.8;
 
-        // Star color from type
+        // Stars keep their natural colors (projected on the green terminal)
         const [r, g, b] = starType.color;
         const alpha = this._fadeIn * pulse;
 
@@ -414,7 +461,7 @@ export class GalaxyMap {
         ctx.arc(pos.x, pos.y, coreSize, 0, Math.PI * 2);
         ctx.fill();
 
-        // Current system marker
+        // Current system marker (green ring)
         if (isCurrent) {
             ctx.strokeStyle = `rgba(0, 255, 136, ${0.5 + Math.sin(this._animTime * 3) * 0.3})`;
             ctx.lineWidth = 1.5;
@@ -422,25 +469,23 @@ export class GalaxyMap {
             ctx.arc(pos.x, pos.y, 14, 0, Math.PI * 2);
             ctx.stroke();
 
-            // "YOU ARE HERE" label
             ctx.fillStyle = `rgba(0, 255, 136, ${alpha * 0.6})`;
             ctx.font = '8px Courier New';
             ctx.textAlign = 'center';
             ctx.fillText('YOU ARE HERE', pos.x, pos.y + 22);
         }
 
-        // Star name (show if zoomed in enough or hovered)
+        // Star name — green terminal text
         if (this.zoom > 0.6 || isHovered) {
             ctx.fillStyle = isHovered
-                ? `rgba(200, 220, 255, ${alpha})`
-                : `rgba(120, 140, 170, ${alpha * 0.6})`;
+                ? `rgba(0, 255, 136, ${alpha})`
+                : `rgba(0, 200, 100, ${alpha * 0.5})`;
             ctx.font = isHovered ? '11px Courier New' : '9px Courier New';
             ctx.textAlign = 'center';
             ctx.fillText(system.star.name, pos.x, pos.y - 12);
 
-            // Planet count
             if (isHovered || this.zoom > 1.2) {
-                ctx.fillStyle = `rgba(80, 100, 130, ${alpha * 0.5})`;
+                ctx.fillStyle = `rgba(0, 140, 70, ${alpha * 0.4})`;
                 ctx.font = '8px Courier New';
                 ctx.fillText(`${system.planetCount} planets · ${starType.name}`, pos.x, pos.y + (isCurrent ? 32 : 18));
             }
@@ -451,30 +496,59 @@ export class GalaxyMap {
         const pos = this.galaxyToScreen(this.playerX, this.playerY);
         const t = this._animTime;
 
-        // Crosshair
+        // Green crosshair
         const size = 20;
         ctx.strokeStyle = `rgba(0, 255, 136, ${0.3 + Math.sin(t * 2) * 0.1})`;
         ctx.lineWidth = 1;
 
-        // Top
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y - size);
         ctx.lineTo(pos.x, pos.y - size * 0.6);
         ctx.stroke();
-        // Bottom
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y + size);
         ctx.lineTo(pos.x, pos.y + size * 0.6);
         ctx.stroke();
-        // Left
         ctx.beginPath();
         ctx.moveTo(pos.x - size, pos.y);
         ctx.lineTo(pos.x - size * 0.6, pos.y);
         ctx.stroke();
-        // Right
         ctx.beginPath();
         ctx.moveTo(pos.x + size, pos.y);
         ctx.lineTo(pos.x + size * 0.6, pos.y);
+        ctx.stroke();
+    }
+
+    _drawTerminalFrame(ctx, w, h) {
+        // Corner brackets — CRT terminal frame
+        const corner = 30;
+        const pad = 12;
+        ctx.strokeStyle = `rgba(0, 255, 136, ${0.15 + Math.sin(this._animTime) * 0.05})`;
+        ctx.lineWidth = 1;
+
+        // Top-left
+        ctx.beginPath();
+        ctx.moveTo(pad, pad + corner);
+        ctx.lineTo(pad, pad);
+        ctx.lineTo(pad + corner, pad);
+        ctx.stroke();
+        // Top-right
+        ctx.beginPath();
+        ctx.moveTo(w - pad - corner, pad);
+        ctx.lineTo(w - pad, pad);
+        ctx.lineTo(w - pad, pad + corner);
+        ctx.stroke();
+        // Bottom-left
+        ctx.beginPath();
+        ctx.moveTo(pad, h - pad - corner);
+        ctx.lineTo(pad, h - pad);
+        ctx.lineTo(pad + corner, h - pad);
+        ctx.stroke();
+        // Bottom-right
+        ctx.beginPath();
+        ctx.moveTo(w - pad - corner, h - pad);
+        ctx.lineTo(w - pad, h - pad);
+        ctx.lineTo(w - pad, h - pad - corner);
         ctx.stroke();
     }
 
@@ -508,7 +582,7 @@ export class GalaxyMap {
             }
         }
 
-        // Update info panel
+        // Update info panel — green terminal card
         if (this.hoveredSystem) {
             const sys = this.hoveredSystem.system;
             const starType = sys.star.type;
@@ -519,17 +593,17 @@ export class GalaxyMap {
             this.infoPanel.style.left = (e.clientX + 20) + 'px';
             this.infoPanel.style.top = (e.clientY - 10) + 'px';
             this.infoPanel.innerHTML = `
-                <div style="color: rgb(${starType.color.join(',')}); font-size: 13px; margin-bottom: 6px;">
+                <div style="color: ${TERM.green}; font-size: 12px; margin-bottom: 4px; text-shadow: 0 0 8px ${TERM.greenGlow};">
                     ${sys.star.name}
                 </div>
-                <div style="color: #556; font-size: 9px; margin-bottom: 8px; letter-spacing: 1px;">
+                <div style="color: ${TERM.dimText}; font-size: 9px; margin-bottom: 6px; letter-spacing: 1px;">
                     ${starType.name} · ${starType.temperature}K
                 </div>
-                <div>Planets: <span style="color: #88ccff">${sys.planetCount}</span></div>
-                <div>Distance: <span style="color: #88ccff">${dist} ly</span></div>
-                <div>Coords: <span style="color: #556">[${this.hoveredSystem.x}, ${this.hoveredSystem.y}]</span></div>
-                ${isCurrent ? '<div style="color: #00ff88; margin-top: 6px;">CURRENT SYSTEM</div>' : ''}
-                ${!isCurrent ? '<div style="color: #446; margin-top: 8px; font-size: 9px;">CLICK TO SELECT</div>' : ''}
+                <div>Planets: <span style="color: ${TERM.green}">${sys.planetCount}</span></div>
+                <div>Distance: <span style="color: ${TERM.green}">${dist} ly</span></div>
+                <div>Coords: <span style="color: ${TERM.dimText}">[${this.hoveredSystem.x}, ${this.hoveredSystem.y}]</span></div>
+                ${isCurrent ? `<div style="color: ${TERM.green}; margin-top: 4px;">CURRENT SYSTEM</div>` : ''}
+                ${!isCurrent ? `<div style="color: ${TERM.dimText}; margin-top: 6px; font-size: 9px;">> SELECT</div>` : ''}
             `;
             this.canvas.style.cursor = 'pointer';
         } else {
@@ -544,7 +618,6 @@ export class GalaxyMap {
         if (this.hoveredSystem) {
             this.selectedSystem = this.hoveredSystem;
 
-            // Notify the game
             if (this.onSystemSelected) {
                 this.onSystemSelected(this.hoveredSystem);
             }
@@ -570,7 +643,6 @@ export class GalaxyMap {
         const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
         this.zoom = Math.max(0.3, Math.min(3.0, this.zoom * zoomDelta));
 
-        // Reload systems if we zoom out enough to see more
         const neededRadius = Math.ceil(this.viewRadius / this.zoom) + 2;
         if (neededRadius > this.viewRadius) {
             this.viewRadius = neededRadius;
@@ -591,17 +663,11 @@ export class GalaxyMap {
     // PUBLIC API
     // ============================================================
 
-    /**
-     * Set the player's current galactic position.
-     */
     setPlayerPosition(x, y) {
         this.playerX = x;
         this.playerY = y;
     }
 
-    /**
-     * Get the UniverseManager (shared instance).
-     */
     getUniverse() {
         return this.universe;
     }
