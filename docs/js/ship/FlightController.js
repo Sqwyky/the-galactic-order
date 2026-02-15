@@ -114,12 +114,12 @@ export const FLIGHT_CONFIG = {
     freeLookReturnSpeed: 5.0,
 
     // Ground collision
-    minAltitude: 3.0,
+    minAltitude: 5.0,
     groundPushForce: 20.0,
 
     // Landing
     landingDescentSpeed: 8.0,
-    landingHeight: 2.5,
+    landingHeight: 3.5,
 
     // Fuel system
     maxFuel: 100.0,
@@ -578,7 +578,7 @@ export class FlightController {
                 this.ship.group.position.x,
                 this.ship.group.position.z
             ) || 0;
-            const hoverTarget = groundH + 20;
+            const hoverTarget = groundH + 45;
             if (currentY < hoverTarget && this.velocity.y < 5) {
                 this.velocity.y += 8 * dt;
             }

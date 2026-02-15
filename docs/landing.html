@@ -276,6 +276,9 @@ import { SystemView } from './js/ui/SystemView.js';
 // Audio
 import { AudioManager } from './js/audio/AudioManager.js';
 
+// First-person view model
+import { FPSViewModel } from './js/ui/FPSViewModel.js';
+
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -571,6 +574,9 @@ const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerH
 // Start high up for descent
 camera.position.set(0, 200, 0);
 camera.lookAt(0, 0, 0);
+
+// First-person view model (arm + multi-tool, visible on surface)
+const fpsViewModel = new FPSViewModel(camera);
 
 // Finalize post-processing pipeline (needs camera + scene)
 composer.addPass(new RenderPass(scene, camera));
@@ -931,7 +937,7 @@ function returnToFlight() {
 
     // Re-enable flight systems at current ship position
     const shipPos = shipModel.group.position.clone();
-    shipPos.y = Math.max(shipPos.y, 60); // Ensure reasonable altitude
+    shipPos.y = Math.max(shipPos.y, 80); // Ensure above tallest terrain
     flightController.enable(shipPos);
     weaponSystem.enable();
     scannerSystem.enable();
@@ -990,6 +996,7 @@ function transitionToPlanet(newRule, newSeed) {
     // ---- Disable all active systems ----
     walker.disable();
     miningSystem.disable();
+    fpsViewModel.hide();
     flightController.disable();
     weaponSystem.disable();
     scannerSystem.disable();
@@ -1149,7 +1156,7 @@ function transitionToPlanet(newRule, newSeed) {
     shipModel.group.visible = false;
     shipModel.setLandingGear(true);
 
-    // ---- Camera to descent start position ----
+    // ---- Camera to descent start position (above terrain peaks) ----
     camera.position.set(0, descentStartHeight, 0);
     camera.lookAt(0, 0, 0);
 
@@ -1221,6 +1228,9 @@ function enterShip() {
     document.getElementById('phaseName').textContent = 'FLIGHT MODE';
     document.getElementById('phaseInfo').textContent = `${planetName} · System [${currentSystemX}, ${currentSystemY}]`;
 
+    // Hide first-person view model in ship
+    fpsViewModel.hide();
+
     // Audio: switch to flight (engine + space ambience)
     audioManager.setPhase('flight');
     audioManager.playSFX('ui_open');
@@ -1254,6 +1264,9 @@ function exitShip() {
         // Update phase HUD
         document.getElementById('phaseName').textContent = 'SURFACE EXPLORATION';
         document.getElementById('phaseInfo').textContent = `${planetName} · Rule ${planetRule}`;
+
+        // Show first-person view model
+        fpsViewModel.show();
 
         // Audio: switch to surface ambience
         audioManager.setPhase('surface');
@@ -1387,8 +1400,8 @@ function triggerBeingDialogue() {
 // ============================================================
 let descentProgress = 0;
 const descentDuration = 6.0; // seconds
-const descentStartHeight = 300;
-const descentEndHeight = 15; // just above ground
+const descentStartHeight = 400;
+const descentEndHeight = 55; // safely above tallest terrain peaks
 let descentLanded = false;
 
 function updateDescent(dt) {
@@ -1522,13 +1535,16 @@ function onLanded() {
     const shipX = camera.position.x + shipSpawnOffset.x;
     const shipZ = camera.position.z + shipSpawnOffset.z;
     const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || groundH;
-    shipModel.group.position.set(shipX, shipGroundH + 2.5, shipZ);
+    shipModel.group.position.set(shipX, shipGroundH + 3.5, shipZ);
     shipModel.group.visible = true; // Ensure visible after hyperspace warp
     shipGrounded = true;
 
     // Audio: switch to surface ambience
     audioManager.setPhase('surface');
     audioManager.playSFX('landing');
+
+    // Show first-person view model (arm + multi-tool)
+    fpsViewModel.show();
 
     // Spawn the Mysterious Being
     setTimeout(() => {
@@ -1618,6 +1634,15 @@ function animate() {
             audioManager.playSFX('mining_stop');
         }
         _wasMining = miningInfo.isFiring;
+
+        // Update first-person view model (arm + multi-tool sway/bob)
+        fpsViewModel.setMining(miningInfo.isFiring);
+        fpsViewModel.update(dt, {
+            yaw: walker.rotation.yaw,
+            pitch: walker.rotation.pitch,
+            speed: Math.sqrt(walker.velocity.x ** 2 + walker.velocity.z ** 2),
+            headBobOffset: walker.headBobOffset,
+        });
 
         // Update inventory display in tablet if open
         if (tablet.isOpen) {
@@ -1843,6 +1868,7 @@ window._debug = {
     get systemView() { return systemView; },
     get galacticPos() { return { x: currentSystemX, y: currentSystemY }; },
     get audio() { return audioManager; },
+    get viewModel() { return fpsViewModel; },
     warpTo: transitionToPlanet,
 };
 

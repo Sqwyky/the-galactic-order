@@ -25,8 +25,8 @@ import { deriveShapeParams, deriveShapeColors } from '../generation/caShapeParam
 const ROCK_CONFIG = {
     rocksPerChunk: 40,
     rockRadius: 3,       // chunks around camera that get rocks
-    minScale: 0.2,
-    maxScale: 1.5,
+    minScale: 0.4,
+    maxScale: 3.0,
     // Biome → density & scale multiplier
     biomeDensity: {
         2: 0.3,   // Beach — scattered shells/pebbles
@@ -41,8 +41,8 @@ const ROCK_CONFIG = {
         11: 0.5,  // Ice — ice rocks
     },
     biomeScaleBoost: {
-        9: 2.0,   // Mountain rocks are bigger
-        10: 1.5,  // Snow peak rocks medium
+        9: 3.0,   // Mountain boulders — towering
+        10: 2.0,  // Snow peak rocks large
     },
 };
 

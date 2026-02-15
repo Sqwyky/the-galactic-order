@@ -28,7 +28,7 @@ export class HyperspaceSystem {
         this.isCharging = false;
         this.chargeProgress = 0; // 0 to 1
         this.chargeDuration = 2.0; // seconds to hold Space
-        this.minAltitude = 50; // must be above this to jump
+        this.minAltitude = 80; // must be above this to jump
         this.isJumping = false;
 
         // Seamless transition callback — called instead of page redirect

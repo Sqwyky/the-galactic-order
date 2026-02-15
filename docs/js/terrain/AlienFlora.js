@@ -120,9 +120,10 @@ export class AlienFloraSystem {
             const hasTrunk = v < 2 && !flags.isFlat; // First 2 variants get trunks
             if (hasTrunk) {
                 // Merge stalk + supershape cap into one geometry
-                const stalkHeight = 1.0 + (v * 0.5);
-                const stalk = createStalkGeometry(stalkHeight, 0.06, 0.04);
-                geo = mergeGeometries(stalk, geo, stalkHeight * 0.5 + 0.3);
+                // Taller trunks so trees tower over the player
+                const stalkHeight = 2.5 + (v * 1.0);
+                const stalk = createStalkGeometry(stalkHeight, 0.12, 0.08);
+                geo = mergeGeometries(stalk, geo, stalkHeight * 0.5 + 0.4);
             }
 
             // Create material with wind sway (custom ShaderMaterial)
@@ -256,8 +257,9 @@ export class AlienFloraSystem {
             });
 
             // Scale and shape characteristics based on variant index
-            const baseScales = [1.5, 1.2, 0.8, 0.6, 0.4]; // Decreasing size per variant
-            const scaleVars = [1.5, 1.0, 0.8, 0.6, 0.3];
+            // Larger values so flora towers over the player (1.7m eye height)
+            const baseScales = [3.5, 2.8, 2.0, 1.4, 0.8]; // Decreasing size per variant
+            const scaleVars = [2.5, 2.0, 1.5, 1.0, 0.6];
 
             this.floraTypes.push({
                 name: `variant_${v}_${variant.style}`,

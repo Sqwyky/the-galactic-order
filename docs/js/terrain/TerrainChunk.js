@@ -41,8 +41,8 @@ export const TERRAIN_CONFIG = {
     // View radius in chunks (how far terrain extends around the player)
     viewRadius: 6,
 
-    // Height scale multiplier
-    heightScale: 15.0,
+    // Height scale multiplier (taller = more impressive terrain, player feels small)
+    heightScale: 40.0,
 
     // Water level (0-1 in heightmap space) — 0 = no water, all land
     waterLevel: 0.0,
@@ -83,7 +83,7 @@ export const TERRAIN_CONFIG = {
 
     // === Skirt geometry ===
     // Depth of skirt below chunk edges to hide LOD cracks
-    skirtDepth: 2.0,
+    skirtDepth: 5.0,
 };
 
 // ============================================================
@@ -249,16 +249,16 @@ export class TerrainChunkMesh {
             const vz = pos.getZ(i);
             const elevation = this.elevation[i] || 0;
 
-            // Height displacement — smooth power curve for NMS-style terrain
+            // Height displacement — smooth rolling terrain (NMS-style)
             let height = 0;
             const wl = config.waterLevel;
             if (elevation > wl + 0.05) {
-                // Above water: smooth power curve
+                // Above water: gentle power curve for smooth rolling hills
                 const normalizedElev = (elevation - wl) / (1.0 - wl);
-                height = Math.pow(normalizedElev, 1.4) * config.heightScale;
-                // Gentle extra lift for high peaks
+                height = Math.pow(normalizedElev, 1.15) * config.heightScale;
+                // Gentle extra lift for high peaks (restrained to keep smooth)
                 if (elevation > 0.75) {
-                    height += (elevation - 0.75) * config.heightScale * 0.6;
+                    height += (elevation - 0.75) * config.heightScale * 0.25;
                 }
             } else if (elevation > wl - 0.05) {
                 // Beach/shoreline transition zone — smooth blend from water to land
@@ -382,9 +382,9 @@ export class TerrainChunkMesh {
         let height = 0;
         if (elevation > wl + 0.05) {
             const normalizedElev = (elevation - wl) / (1.0 - wl);
-            height = Math.pow(normalizedElev, 1.4) * TERRAIN_CONFIG.heightScale;
+            height = Math.pow(normalizedElev, 1.15) * TERRAIN_CONFIG.heightScale;
             if (elevation > 0.75) {
-                height += (elevation - 0.75) * TERRAIN_CONFIG.heightScale * 0.6;
+                height += (elevation - 0.75) * TERRAIN_CONFIG.heightScale * 0.25;
             }
         } else if (elevation > wl - 0.05) {
             const t = (elevation - (wl - 0.05)) / 0.10;

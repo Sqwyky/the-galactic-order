@@ -38,8 +38,8 @@ export const WALK_CONFIG = {
     headBobAmplitude: 0.06,   // meters (noticeable NMS-style bob)
 
     // Physics
-    groundSnapDistance: 2.0,   // how far below to check for ground
-    slopeSmoothing: 0.12,     // how fast camera follows slopes (0 = instant, 1 = never)
+    groundSnapDistance: 3.5,   // how far below to check for ground
+    slopeSmoothing: 0.06,     // smoother camera on bigger terrain slopes
 };
 
 // ============================================================

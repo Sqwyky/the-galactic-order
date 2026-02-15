@@ -29,9 +29,9 @@ import { TERRAIN_CONFIG } from './TerrainChunk.js';
 const GRASS_CONFIG = {
     bladesPerChunk: 300,     // max blades per terrain chunk
     grassRadius: 3,          // chunks around camera that get grass
-    bladeWidth: 0.15,        // meters
-    bladeMinHeight: 0.3,     // meters
-    bladeMaxHeight: 0.8,     // meters
+    bladeWidth: 0.18,        // meters
+    bladeMinHeight: 0.4,     // meters
+    bladeMaxHeight: 1.1,     // meters
     windSpeed: 1.5,          // wind animation speed
     windStrength: 0.15,      // how far blades sway
     // Biomes that get grass (biome ID → density multiplier)
