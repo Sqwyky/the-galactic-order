@@ -448,8 +448,10 @@ export class FlightController {
 
         // Pioneer: rotational thrusters apply angular acceleration
         // Angular velocity accumulates (like real space physics)
-        const pitchAccel = (this.pitchInput + touchPitch) * this.config.pitchSpeed;
-        const yawAccel = (this.yawInput + touchYaw) * this.config.yawSpeed;
+        // No fuel = no rotational thrust
+        const hasFuel = this.fuel > 0;
+        const pitchAccel = hasFuel ? (this.pitchInput + touchPitch) * this.config.pitchSpeed : 0;
+        const yawAccel = hasFuel ? (this.yawInput + touchYaw) * this.config.yawSpeed : 0;
 
         // Apply rotation scaled by thruster spool state
         const pitchSpool = this.thrusterStates.pitch;
@@ -458,13 +460,22 @@ export class FlightController {
         euler.y += yawAccel * yawSpool * dt;
         euler.x += pitchAccel * pitchSpool * dt;
 
+        // Consume fuel for rotational thrusters
+        if (hasFuel) {
+            let rotFuelBurn = 0;
+            if (pitchSpool > 0) rotFuelBurn += THRUSTER_CONFIG.rotation.fuelRate * pitchSpool;
+            if (yawSpool > 0) rotFuelBurn += THRUSTER_CONFIG.rotation.fuelRate * yawSpool;
+            if (this.thrusterStates.roll > 0) rotFuelBurn += THRUSTER_CONFIG.rotation.fuelRate * this.thrusterStates.roll;
+            this.fuel = Math.max(0, this.fuel - rotFuelBurn * dt);
+        }
+
         // Clamp pitch
         euler.x = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, euler.x));
 
-        // Q/E roll (Pioneer has explicit roll control)
+        // Q/E roll (Pioneer has explicit roll control) — requires fuel
         this.rollInput = 0;
-        if (this.keys['KeyQ']) this.rollInput = 1;
-        if (this.keys['KeyE']) this.rollInput = -1;
+        if (hasFuel && this.keys['KeyQ']) this.rollInput = 1;
+        if (hasFuel && this.keys['KeyE']) this.rollInput = -1;
 
         // Bank from strafe + yaw (cosmetic)
         const strafeInput = (this.keys['KeyA'] ? 1 : 0) - (this.keys['KeyD'] ? 1 : 0)
@@ -695,6 +706,22 @@ export class FlightController {
             // Thruster spool states for HUD visualization
             thrusters: { ...this.thrusterStates },
         };
+    }
+
+    /**
+     * Add fuel back to the tank (e.g. when landing at a station).
+     * @param {number} amount - Fuel units to add
+     */
+    refuel(amount) {
+        this.fuel = Math.min(this.config.maxFuel, this.fuel + amount);
+    }
+
+    /**
+     * Current fuel as a 0-1 ratio (for HUD bars).
+     * @returns {number}
+     */
+    get fuelRatio() {
+        return this.fuel / this.config.maxFuel;
     }
 
     isNearPosition(worldPos, radius = 8) {

@@ -70,6 +70,9 @@ export class WalkingController {
         this.isGrounded = false;
         this.isSprinting = false;
 
+        // Touch input (injected by TouchControls)
+        this._touchInput = null; // { moveX, moveZ, lookYaw, lookPitch, sprint, jump }
+
         // Head bob
         this.headBobPhase = 0;
         this.headBobOffset = 0;
@@ -89,6 +92,14 @@ export class WalkingController {
         this._onMouseMove = this._onMouseMove.bind(this);
         this._onPointerLockChange = this._onPointerLockChange.bind(this);
         this._onClick = this._onClick.bind(this);
+    }
+
+    /**
+     * Set touch input from TouchControls (called each frame on mobile).
+     * @param {Object|null} input - { moveX, moveZ, lookYaw, lookPitch, sprint, jump }
+     */
+    setTouchInput(input) {
+        this._touchInput = input;
     }
 
     /**
@@ -191,18 +202,37 @@ export class WalkingController {
         // Input direction
         this._moveDir.set(0, 0, 0);
 
-        if (this.keys['KeyW'] || this.keys['ArrowUp'])    this._moveDir.add(this._forward);
-        if (this.keys['KeyS'] || this.keys['ArrowDown'])   this._moveDir.sub(this._forward);
-        if (this.keys['KeyA'] || this.keys['ArrowLeft'])   this._moveDir.sub(this._right);
-        if (this.keys['KeyD'] || this.keys['ArrowRight'])  this._moveDir.add(this._right);
+        // Touch input (analog joystick) takes priority if active
+        const ti = this._touchInput;
+        if (ti && (ti.moveX !== 0 || ti.moveZ !== 0)) {
+            // Analog stick: moveZ = forward/back, moveX = strafe
+            this._moveDir.addScaledVector(this._forward, ti.moveZ);
+            this._moveDir.addScaledVector(this._right, ti.moveX);
+            // Apply touch look
+            this.rotation.yaw -= ti.lookYaw * 0.02;
+            this.rotation.pitch -= ti.lookPitch * 0.02;
+            this.rotation.pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, this.rotation.pitch));
+        } else {
+            if (this.keys['KeyW'] || this.keys['ArrowUp'])    this._moveDir.add(this._forward);
+            if (this.keys['KeyS'] || this.keys['ArrowDown'])   this._moveDir.sub(this._forward);
+            if (this.keys['KeyA'] || this.keys['ArrowLeft'])   this._moveDir.sub(this._right);
+            if (this.keys['KeyD'] || this.keys['ArrowRight'])  this._moveDir.add(this._right);
+        }
+
+        // Touch look (even without movement)
+        if (ti && (ti.lookYaw !== 0 || ti.lookPitch !== 0) && ti.moveX === 0 && ti.moveZ === 0) {
+            this.rotation.yaw -= ti.lookYaw * 0.02;
+            this.rotation.pitch -= ti.lookPitch * 0.02;
+            this.rotation.pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, this.rotation.pitch));
+        }
 
         // Normalize diagonal movement
         if (this._moveDir.lengthSq() > 0) {
             this._moveDir.normalize();
         }
 
-        // Speed
-        this.isSprinting = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
+        // Speed (touch boost or keyboard sprint)
+        this.isSprinting = (ti && ti.sprint) || this.keys['ShiftLeft'] || this.keys['ShiftRight'];
         const speed = this.isSprinting ? this.config.sprintSpeed : this.config.walkSpeed;
 
         // Apply movement
@@ -259,8 +289,8 @@ export class WalkingController {
             }
         }
 
-        // Jump
-        if (this.isGrounded && this.keys['Space']) {
+        // Jump (keyboard or touch)
+        if (this.isGrounded && (this.keys['Space'] || (this._touchInput && this._touchInput.jump))) {
             this.velocity.y = this.config.jumpForce;
             this.isGrounded = false;
         }

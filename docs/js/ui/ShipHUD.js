@@ -21,6 +21,8 @@ export class ShipHUD {
         this.altEl = null;
         this.weaponEl = null;
         this.boostBar = null;
+        this.fuelBar = null;
+        this.fuelLabel = null;
         this.crosshair = null;
         this.promptEl = null;
 
@@ -154,6 +156,34 @@ export class ShipHUD {
                 "></div>
             </div>
 
+            <!-- Fuel gauge (left side, below flight info) -->
+            <div style="
+                position: absolute;
+                top: 120px;
+                left: 20px;
+            ">
+                <div style="
+                    color: #557766;
+                    font-size: 9px;
+                    letter-spacing: 2px;
+                    margin-bottom: 4px;
+                ">FUEL</div>
+                <div style="width: 120px; height: 6px; background: #111; border: 1px solid #223; position: relative;">
+                    <div id="ship-fuel-bar" style="
+                        width: 100%;
+                        height: 100%;
+                        background: linear-gradient(90deg, #00ff88, #33ffcc);
+                        transition: width 0.2s;
+                    "></div>
+                </div>
+                <div id="ship-fuel-label" style="
+                    color: #557766;
+                    font-size: 9px;
+                    letter-spacing: 1px;
+                    margin-top: 2px;
+                ">100 / 100</div>
+            </div>
+
             <!-- Controls reminder (bottom right) -->
             <div style="
                 position: absolute;
@@ -196,6 +226,8 @@ export class ShipHUD {
         this.boostBar = this.container.querySelector('#ship-boost-bar');
         this.boostLabel = this.container.querySelector('#ship-boost-label');
         this.coordsEl = this.container.querySelector('#ship-coords');
+        this.fuelBar = this.container.querySelector('#ship-fuel-bar');
+        this.fuelLabel = this.container.querySelector('#ship-fuel-label');
         this.promptEl = this.container.querySelector('#ship-enter-prompt');
     }
 
@@ -249,6 +281,29 @@ export class ShipHUD {
 
         // Coordinates
         this.coordsEl.textContent = `X:${flightInfo.x} Z:${flightInfo.z}`;
+
+        // Fuel gauge
+        if (flightInfo.fuel !== undefined && flightInfo.maxFuel) {
+            const fuelPct = (flightInfo.fuel / flightInfo.maxFuel) * 100;
+            this.fuelBar.style.width = `${fuelPct}%`;
+
+            // Color: green → yellow → red based on fuel level
+            if (fuelPct <= 10) {
+                this.fuelBar.style.background = '#ff3333';
+                this.fuelLabel.style.color = '#ff3333';
+            } else if (fuelPct <= 25) {
+                this.fuelBar.style.background = '#ff6644';
+                this.fuelLabel.style.color = '#ff6644';
+            } else if (fuelPct <= 50) {
+                this.fuelBar.style.background = 'linear-gradient(90deg, #ffcc44, #ffee66)';
+                this.fuelLabel.style.color = '#ffcc44';
+            } else {
+                this.fuelBar.style.background = 'linear-gradient(90deg, #00ff88, #33ffcc)';
+                this.fuelLabel.style.color = '#557766';
+            }
+
+            this.fuelLabel.textContent = `${flightInfo.fuel} / ${flightInfo.maxFuel}`;
+        }
 
         // Weapon
         if (weaponInfo) {

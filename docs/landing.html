@@ -365,6 +365,7 @@ import { DayNightCycle } from './js/rendering/DayNightCycle.js';
 
 // Survival stats
 import { SurvivalStats } from './js/ui/SurvivalStats.js';
+import { TouchControls } from './js/ui/TouchControls.js';
 
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -452,7 +453,7 @@ const colorGradeShader = {
         uContrast: { value: 1.12 },
         uBrightness: { value: 0.01 },
         uVignetteStrength: { value: 0.45 },
-        uChromaticAberration: { value: 0.003 },
+        uChromaticAberration: { value: 0.001 },
     },
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -676,12 +677,20 @@ dayNightCycle.setPlanetMood(planetMood);
 const survivalStats = new SurvivalStats();
 survivalStats.setPlanetHazard(planetMood.band);
 survivalStats.onRespawn = () => {
+    // Lose 25% of each resource on death (NMS-style penalty)
+    for (const [id, qty] of Object.entries(inventory.items)) {
+        if (qty > 0) {
+            const loss = Math.floor(qty * 0.25);
+            if (loss > 0) inventory.remove(id, loss);
+        }
+    }
     // Respawn at ship position
     if (shipModel && shipModel.group.visible) {
         const sp = shipModel.group.position;
         const groundH = terrainManager.getHeightAt(sp.x, sp.z) || 0;
         walker.enable(new THREE.Vector3(sp.x + 3, groundH + 1.7, sp.z + 3));
     }
+    saveGame();
 };
 
 // Finalize post-processing pipeline (needs camera + scene)
@@ -799,6 +808,13 @@ scene.add(groundFill);
 const walker = new WalkingController(camera, canvas, (x, z) => {
     return terrainManager.getHeightAt(x, z);
 });
+
+// Mobile touch controls — auto-enables on touch devices
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+const touchControls = new TouchControls(document.body, 'walking');
+if (isTouchDevice) {
+    touchControls.enable();
+}
 
 // ============================================================
 // TABLET UI
@@ -1126,6 +1142,9 @@ function transitionToPlanet(newRule, newSeed) {
     npcManager.dispose();
     if (creatureSystem) creatureSystem.dispose();
 
+    // ---- Save inventory before transition ----
+    saveGame();
+
     // ---- Update planet identity ----
     planetRule = newRule;
     planetSeed = newSeed;
@@ -1333,6 +1352,7 @@ function enterShip() {
 
     // Disable walking
     walker.disable();
+    touchControls.setMode('flight');
 
     miningSystem.disable();
 
@@ -1384,6 +1404,7 @@ function exitShip() {
         const groundH = terrainManager.getHeightAt(landPos.x, landPos.z) || 0;
         const walkStart = new THREE.Vector3(landPos.x + 3, groundH + 1.7, landPos.z + 3);
         walker.enable(walkStart);
+        touchControls.setMode('walking');
 
         miningSystem.enable();
 
@@ -1824,6 +1845,12 @@ function animate() {
     } else if (currentPhase === PHASE.SURFACE) {
         // Don't update walking during dialogue or tablet
         if (!dialogue.isDialogueActive() && !tablet.isOpen) {
+            // Feed touch input to walker (no-op on desktop)
+            if (touchControls.enabled) {
+                walker.setTouchInput(touchControls.getWalkingInput());
+            } else {
+                walker.setTouchInput(null);
+            }
             walker.update(dt);
         }
         terrainManager.update(camera.position, camera, dt);
@@ -2018,7 +2045,8 @@ function animate() {
         } else if (currentPhase === PHASE.SURFACE) {
             const wi = walker.getHUDInfo();
             audioInfo.speed = wi.speed;
-            audioManager.triggerFootstep(wi.speed);
+            const playerBiome = terrainManager.getBiomeAt(camera.position.x, camera.position.z) || 5;
+            audioManager.triggerFootstep(wi.speed, playerBiome);
         }
         audioManager.update(dt, audioInfo);
     }
@@ -2058,6 +2086,9 @@ function saveGame() {
             planetRule,
             planetSeed,
             timestamp: Date.now(),
+            inventory: inventory.toJSON(),
+            survivalHealth: survivalStats.health,
+            survivalHazard: survivalStats.hazardProtection,
         };
         localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
         console.log('[TGO] Game saved:', saveData);
@@ -2083,8 +2114,18 @@ if (!params.has('rule') && !params.has('seed')) {
     if (saved) {
         currentSystemX = saved.systemX;
         currentSystemY = saved.systemY;
-        // Note: planetRule/planetSeed are already set from URL defaults;
-        // the saved values match what was in the URL when saved
+        // Restore inventory if saved
+        if (saved.inventory) {
+            inventory.fromJSON(saved.inventory);
+            console.log('[TGO] Loaded inventory from save.');
+        }
+        // Restore survival stats
+        if (saved.survivalHealth !== undefined) {
+            survivalStats.health = saved.survivalHealth;
+        }
+        if (saved.survivalHazard !== undefined) {
+            survivalStats.hazardProtection = saved.survivalHazard;
+        }
         console.log(`[TGO] Loaded save: System [${saved.systemX}, ${saved.systemY}]`);
     }
 }

@@ -186,8 +186,10 @@ export class AudioManager {
 
     /**
      * Trigger footstep at a rate tied to movement speed.
+     * @param {number} speed - Player movement speed
+     * @param {number} [biomeId=5] - Current biome (affects sound character)
      */
-    triggerFootstep(speed) {
+    triggerFootstep(speed, biomeId = 5) {
         if (!this.initialized || this.muted) return;
         if (speed < 0.5) return; // Not moving
 
@@ -196,7 +198,7 @@ export class AudioManager {
         if (now - this._lastFootstep < interval) return;
 
         this._lastFootstep = now;
-        this._playFootstep();
+        this._playFootstep(biomeId);
     }
 
     toggleMute() {
@@ -574,27 +576,58 @@ export class AudioManager {
     // SFX: ONE-SHOT SOUNDS
     // ============================================================
 
-    _playFootstep() {
+    _playFootstep(biomeId = 5) {
         const ctx = this.ctx;
         const now = ctx.currentTime;
 
-        // Short noise burst + low thud
+        // Biome-specific footstep parameters:
+        // filterFreq: higher = brighter/crunchier, lower = softer/muffled
+        // decay: longer = more reverberant (like a cave), shorter = tight/dry
+        // volume: louder on hard surfaces
+        // pitch: optional thud oscillator frequency
+        const biomeSound = {
+            2:  { freq: 1200, decay: 0.02, vol: 0.06, pitch: 80,  type: 'highpass' }, // Beach — crunchy sand
+            3:  { freq: 1400, decay: 0.015, vol: 0.07, pitch: 100, type: 'highpass' }, // Desert — gritty
+            4:  { freq: 700,  decay: 0.025, vol: 0.07, pitch: 60,  type: 'lowpass' },  // Savanna — dry grass
+            5:  { freq: 500,  decay: 0.03,  vol: 0.06, pitch: 50,  type: 'lowpass' },  // Grassland — soft
+            6:  { freq: 400,  decay: 0.04,  vol: 0.05, pitch: 45,  type: 'lowpass' },  // Forest — leafy, muffled
+            7:  { freq: 350,  decay: 0.045, vol: 0.05, pitch: 40,  type: 'lowpass' },  // Dense Forest — very muffled
+            8:  { freq: 300,  decay: 0.05,  vol: 0.06, pitch: 35,  type: 'lowpass' },  // Swamp — wet squelch
+            9:  { freq: 900,  decay: 0.015, vol: 0.09, pitch: 90,  type: 'lowpass' },  // Mountain — hard rock
+            10: { freq: 1000, decay: 0.02,  vol: 0.08, pitch: 85,  type: 'highpass' }, // Snow — crunchy
+            11: { freq: 1100, decay: 0.015, vol: 0.08, pitch: 95,  type: 'highpass' }, // Ice — crisp
+        };
+        const params = biomeSound[biomeId] || { freq: 600, decay: 0.03, vol: 0.08, pitch: 60, type: 'lowpass' };
+
+        // Noise burst (surface texture)
         const noiseBuffer = this._createNoiseBuffer(0.08);
         const src = ctx.createBufferSource();
         src.buffer = noiseBuffer;
 
         const filter = ctx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.value = 600 + Math.random() * 400;
+        filter.type = params.type;
+        filter.frequency.value = params.freq + Math.random() * 300;
 
         const gain = ctx.createGain();
-        gain.gain.value = 0.08;
-        gain.gain.setTargetAtTime(0, now + 0.02, 0.03);
+        gain.gain.value = params.vol;
+        gain.gain.setTargetAtTime(0, now + params.decay, 0.03);
 
         src.connect(filter);
         filter.connect(gain);
         gain.connect(this.layers.sfx.gain);
         src.start(now);
+
+        // Low-frequency thud (foot impact)
+        const thud = ctx.createOscillator();
+        thud.type = 'sine';
+        thud.frequency.value = params.pitch + Math.random() * 20;
+        const thudGain = ctx.createGain();
+        thudGain.gain.value = params.vol * 0.5;
+        thudGain.gain.setTargetAtTime(0, now + 0.02, 0.02);
+        thud.connect(thudGain);
+        thudGain.connect(this.layers.sfx.gain);
+        thud.start(now);
+        thud.stop(now + 0.08);
     }
 
     _playMiningStart() {

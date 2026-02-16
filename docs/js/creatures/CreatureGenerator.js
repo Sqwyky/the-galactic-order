@@ -100,6 +100,8 @@ export function generateCreatureSpecies(ruleNumber, seed, speciesIndex) {
     const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
     bodyMesh.scale.set(...archetype.bodyScale);
     bodyMesh.castShadow = true;
+    bodyMesh.name = 'body';
+    bodyMesh.userData.partType = 'body';
     group.add(bodyMesh);
 
     // --- HEAD ---
@@ -128,6 +130,8 @@ export function generateCreatureSpecies(ruleNumber, seed, speciesIndex) {
         const bodyZ = archetype.bodyScale[2] * 0.5;
         headMesh.position.set(0, bodyH * 0.6, bodyZ * 0.8 + hs * 0.3);
         headMesh.castShadow = true;
+        headMesh.name = 'head';
+        headMesh.userData.partType = 'head';
         group.add(headMesh);
 
         // --- EYES (small spheres on head) ---
@@ -141,6 +145,7 @@ export function generateCreatureSpecies(ruleNumber, seed, speciesIndex) {
         });
 
         const eyeSpread = hs * 0.25;
+        let eyeIdx = 0;
         for (let side = -1; side <= 1; side += 2) {
             const eye = new THREE.Mesh(eyeGeo, eyeMat);
             eye.position.set(
@@ -148,6 +153,10 @@ export function generateCreatureSpecies(ruleNumber, seed, speciesIndex) {
                 headMesh.position.y + hs * 0.15,
                 headMesh.position.z + hs * 0.35
             );
+            eye.name = `eye_${eyeIdx}`;
+            eye.userData.partType = 'eye';
+            eye.userData.eyeIndex = eyeIdx;
+            eyeIdx++;
             group.add(eye);
         }
     }
@@ -182,6 +191,9 @@ export function generateCreatureSpecies(ruleNumber, seed, speciesIndex) {
             const spreadZ = Math.sin(angle) * bodyL * 0.8;
             leg.position.set(spreadX, legY - archetype.legLength * 0.3, spreadZ);
             leg.castShadow = true;
+            leg.name = `leg_${i}`;
+            leg.userData.partType = 'leg';
+            leg.userData.legIndex = i;
             group.add(leg);
             legs.push(leg);
         }
@@ -207,6 +219,8 @@ export function generateCreatureSpecies(ruleNumber, seed, speciesIndex) {
         const tail = new THREE.Mesh(tailGeo, tailMat);
         tail.position.set(0, 0, -archetype.bodyScale[2] * 0.5);
         tail.rotation.x = -0.3;
+        tail.name = 'tail';
+        tail.userData.partType = 'tail';
         group.add(tail);
     }
 
