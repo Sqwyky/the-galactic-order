@@ -212,6 +212,10 @@ export class TerrainChunkMesh {
 
         // LOD metrics
         this.lastDistanceToCamera = Infinity;
+
+        // Fade-in: chunks start transparent and smoothly appear
+        this.fadeProgress = 0; // 0 = invisible, 1 = fully opaque
+        this.fadeSpeed = 3.0;  // Fully visible in ~0.33 seconds
     }
 
     /**
@@ -378,6 +382,11 @@ export class TerrainChunkMesh {
         // Terrain receives shadows from sun (flora/rocks cast)
         this.mesh.castShadow = false;
         this.mesh.receiveShadow = true;
+
+        // Start faded out — will smoothly fade in via updateFade()
+        this.fadeProgress = 0;
+        mat.transparent = true;
+        mat.opacity = 0;
 
         this.state = 'ready';
         return this.mesh;
@@ -552,6 +561,25 @@ export class TerrainChunkMesh {
         geo.setIndex(newIndices);
     }
 
+    /**
+     * Advance fade-in animation. Call each frame.
+     * @param {number} dt - Delta time in seconds
+     * @returns {boolean} True if still fading
+     */
+    updateFade(dt) {
+        if (this.fadeProgress >= 1) return false;
+        this.fadeProgress = Math.min(1, this.fadeProgress + dt * this.fadeSpeed);
+        if (this.material) {
+            this.material.opacity = this.fadeProgress;
+            // Switch to opaque once fully faded in (better performance)
+            if (this.fadeProgress >= 1) {
+                this.material.transparent = false;
+                this.material.opacity = 1;
+            }
+        }
+        return this.fadeProgress < 1;
+    }
+
     dispose() {
         if (this.geometry) this.geometry.dispose();
         if (this.material) this.material.dispose();
@@ -688,6 +716,15 @@ export class TerrainManager {
         // Process generation queue (parallel)
         this._processQueue();
 
+        // Update chunk fade-in animations
+        if (dt && dt > 0) {
+            for (const chunk of this.chunks.values()) {
+                if (chunk.fadeProgress < 1) {
+                    chunk.updateFade(dt);
+                }
+            }
+        }
+
         // Update water plane position
         if (this.waterMesh) {
             this.waterMesh.position.set(camX, -0.3, camZ);
@@ -718,9 +755,11 @@ export class TerrainManager {
             }
 
             // Check if an active chunk now covers this stale chunk's area
+            // AND is sufficiently faded in (visible enough to replace the stale chunk)
             let covered = false;
             for (const [, active] of this.chunks) {
                 if (active.state !== 'ready' || !active.mesh) continue;
+                if (active.fadeProgress < 0.5) continue; // Don't remove stale until replacement is visible
                 const aHalf = active.worldSize / 2;
                 const sHalf = stale.worldSize / 2;
                 // Active chunk covers stale if it overlaps its center area
@@ -927,6 +966,11 @@ export class TerrainManager {
                 // Pass LOD depth so worker can adjust generation
                 lodDepth: depth,
                 worldSize: worldSize,
+                // World coordinates for consistent noise across all LOD levels
+                worldX: chunk.worldX,
+                worldZ: chunk.worldZ,
+                // Chunk key for reliable matching on response
+                key: key,
             }
         });
 
@@ -964,22 +1008,16 @@ export class TerrainManager {
 
         this._activeGenerations = Math.max(0, this._activeGenerations - 1);
 
-        // Find the pending chunk
-        let matchKey = null;
-        for (const [key, chunk] of this.pendingChunks) {
-            if (chunk.x === data.chunkX && chunk.y === data.chunkY && chunk.state === 'generating') {
-                matchKey = key;
-                break;
-            }
-        }
+        // Match by key (exact depth:x:y) for reliable identification
+        const matchKey = data.key;
+        const chunk = matchKey ? this.pendingChunks.get(matchKey) : null;
 
-        if (!matchKey) {
+        if (!chunk || chunk.state !== 'generating') {
             // Chunk was removed while generating — discard
             this._processQueue();
             return;
         }
 
-        const chunk = this.pendingChunks.get(matchKey);
         this.pendingChunks.delete(matchKey);
 
         // Build the 3D mesh (try pooled material first)

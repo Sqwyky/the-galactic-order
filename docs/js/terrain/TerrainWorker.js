@@ -271,6 +271,8 @@ function generateChunk(params) {
         rule,
         seed,
         moistureRule,
+        worldX, worldZ, worldSize, // World coordinates for LOD-consistent noise
+        key,                        // Chunk key for matching
     } = params;
 
     // Generate chunkSize+1 data points per edge for seamless stitching.
@@ -300,11 +302,24 @@ function generateChunk(params) {
     const warpScale = featureScale * 0.5; // Large-scale warping
     const warpAmount = ruleClass >= 3 ? 30.0 : 18.0; // Chaotic rules = more warping
 
+    // Use world coordinates for noise sampling so ALL LOD levels produce
+    // consistent terrain. Without this, depth-0 and depth-1 chunks sample
+    // different noise coordinates, causing terrain to "jump" on LOD transitions.
+    const useWorldCoords = worldX !== undefined && worldZ !== undefined && worldSize !== undefined;
+
     for (let ly = 0; ly < dataSize; ly++) {
         for (let lx = 0; lx < dataSize; lx++) {
-            // Global coordinates (continuous across chunks)
-            const gx = chunkX * chunkSize + lx;
-            const gy = chunkY * chunkSize + ly;
+            // Global coordinates (continuous across chunks AND LOD levels)
+            let gx, gy;
+            if (useWorldCoords) {
+                // World-space coords: chunk center + local offset scaled to world size
+                gx = worldX + (lx / chunkSize - 0.5) * worldSize;
+                gy = worldZ + (ly / chunkSize - 0.5) * worldSize;
+            } else {
+                // Legacy grid-based coords (only depth-0 is correct)
+                gx = chunkX * chunkSize + lx;
+                gy = chunkY * chunkSize + ly;
+            }
 
             // Domain warping — warp sample coordinates for organic shapes
             const warpX = fbmNoise2D(gx * warpScale, gy * warpScale, warpSeed, 4);
@@ -346,6 +361,7 @@ function generateChunk(params) {
         elevation: finalElev,
         moisture: finalMoist,
         biomeIds,
+        key, // Echo back for reliable chunk matching
     };
 }
 
