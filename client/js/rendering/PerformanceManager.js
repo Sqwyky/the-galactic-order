@@ -63,6 +63,22 @@ const TIER_SETTINGS = {
         gtaoRadius:              0.5,
         filmGrainIntensity:      0.025,
         saturationBoost:         1.3,
+        // 8 new rendering features
+        motionBlur:              true,
+        motionBlurSamples:       16,
+        motionBlurScale:         1.0,
+        dof:                     true,
+        dofSamples:              32,
+        dofMaxBlur:              10.0,
+        contactShadows:          true,
+        contactShadowSteps:      16,
+        contactShadowStrength:   0.4,
+        cloudShadows:            true,
+        waterCaustics:           true,
+        ssgi:                    true,
+        ssgiRays:                8,
+        ssgiSteps:               16,
+        ssgiIntensity:           0.5,
     },
 
     // ---- HIGH: slight GTAO reduction, fewer particles ----
@@ -85,6 +101,22 @@ const TIER_SETTINGS = {
         gtaoRadius:              0.4,
         filmGrainIntensity:      0.025,
         saturationBoost:         1.3,
+        // 8 new rendering features
+        motionBlur:              true,
+        motionBlurSamples:       8,
+        motionBlurScale:         0.8,
+        dof:                     true,
+        dofSamples:              16,
+        dofMaxBlur:              8.0,
+        contactShadows:          true,
+        contactShadowSteps:      8,
+        contactShadowStrength:   0.35,
+        cloudShadows:            true,
+        waterCaustics:           true,
+        ssgi:                    true,
+        ssgiRays:                4,
+        ssgiSteps:               8,
+        ssgiIntensity:           0.4,
     },
 
     // ---- MEDIUM: no GTAO, bloom + grain preserved, halved particles ----
@@ -107,6 +139,22 @@ const TIER_SETTINGS = {
         gtaoRadius:              0.3,
         filmGrainIntensity:      0.02,
         saturationBoost:         1.35,  // Slightly higher to compensate for no GTAO depth
+        // 8 new rendering features
+        motionBlur:              true,
+        motionBlurSamples:       4,
+        motionBlurScale:         0.5,
+        dof:                     false,
+        dofSamples:              16,
+        dofMaxBlur:              8.0,
+        contactShadows:          false,
+        contactShadowSteps:      8,
+        contactShadowStrength:   0.35,
+        cloudShadows:            true,
+        waterCaustics:           true,
+        ssgi:                    false,
+        ssgiRays:                4,
+        ssgiSteps:               8,
+        ssgiIntensity:           0.4,
     },
 
     // ---- LOW: no SSAO, reduced bloom + grain, sparse grass ----
@@ -130,6 +178,22 @@ const TIER_SETTINGS = {
         gtaoRadius:              0.3,
         filmGrainIntensity:      0.015,
         saturationBoost:         1.4,   // Higher saturation compensates for fewer visual layers
+        // 8 new rendering features — all disabled on LOW
+        motionBlur:              false,
+        motionBlurSamples:       4,
+        motionBlurScale:         0.5,
+        dof:                     false,
+        dofSamples:              16,
+        dofMaxBlur:              8.0,
+        contactShadows:          false,
+        contactShadowSteps:      8,
+        contactShadowStrength:   0.35,
+        cloudShadows:            false,
+        waterCaustics:           false,
+        ssgi:                    false,
+        ssgiRays:                4,
+        ssgiSteps:               8,
+        ssgiIntensity:           0.4,
     },
 
     // ---- POTATO: everything stays ON but at minimum — looks good, runs fast ----
@@ -152,6 +216,22 @@ const TIER_SETTINGS = {
         gtaoRadius:              0.3,
         filmGrainIntensity:      0.012, // Subtle but present
         saturationBoost:         1.45,  // Extra pop to compensate for less geometry detail
+        // 8 new rendering features — all disabled on POTATO
+        motionBlur:              false,
+        motionBlurSamples:       4,
+        motionBlurScale:         0.5,
+        dof:                     false,
+        dofSamples:              16,
+        dofMaxBlur:              8.0,
+        contactShadows:          false,
+        contactShadowSteps:      8,
+        contactShadowStrength:   0.35,
+        cloudShadows:            false,
+        waterCaustics:           false,
+        ssgi:                    false,
+        ssgiRays:                4,
+        ssgiSteps:               8,
+        ssgiIntensity:           0.4,
     },
 };
 
@@ -224,6 +304,14 @@ export class PerformanceManager {
         this._autoExposure   = null;   // Eye adaptation
         this._volumetricClouds = null; // 3D volumetric clouds
         this._atmospherePass = null;   // Ray-marched atmosphere
+
+        // ---- 8 new rendering features ----
+        this._motionBlurPass     = null;
+        this._dofPass            = null;
+        this._contactShadowPass  = null;
+        this._ssgiPass           = null;
+        this._weatherSystem      = null;
+        this._triplanarMaterial  = null;
 
         // ---- Device capabilities (populated by _detectHardware) ----
         this.deviceInfo = {
@@ -511,6 +599,13 @@ export class PerformanceManager {
         this._atmospherePass = passes.atmospherePass || null;
         this._skyDome = passes.skyDome || null;
         this._csmManager = passes.csmManager || null;
+        // 8 new rendering features
+        this._motionBlurPass = passes.motionBlurPass || null;
+        this._dofPass = passes.dofPass || null;
+        this._contactShadowPass = passes.contactShadowPass || null;
+        this._ssgiPass = passes.ssgiPass || null;
+        this._weatherSystem = passes.weatherSystem || null;
+        this._triplanarMaterial = passes.triplanarMaterial || null;
         this._syncPasses();
     }
 
@@ -626,6 +721,77 @@ export class PerformanceManager {
         if (this._csmManager) {
             // ULTRA/HIGH: 3 cascades, MEDIUM: 2 cascades, LOW/POTATO: disabled
             this._csmManager.setQuality(tierName);
+        }
+
+        // ---- 8 New Rendering Features ----
+
+        // Motion Blur
+        if (this._motionBlurPass) {
+            this._motionBlurPass.enabled = cfg.motionBlur;
+            if (cfg.motionBlur) {
+                this._motionBlurPass.samples = cfg.motionBlurSamples;
+                this._motionBlurPass.velocityScale = cfg.motionBlurScale;
+                this._motionBlurPass._material.uniforms.uSamples.value = cfg.motionBlurSamples;
+                this._motionBlurPass._material.uniforms.uVelocityScale.value = cfg.motionBlurScale;
+            }
+        }
+
+        // Depth of Field
+        if (this._dofPass) {
+            this._dofPass.enabled = cfg.dof;
+            if (cfg.dof) {
+                this._dofPass.samples = cfg.dofSamples;
+                this._dofPass.maxBlur = cfg.dofMaxBlur;
+                this._dofPass._material.uniforms.uSamples.value = cfg.dofSamples;
+                this._dofPass._material.uniforms.uMaxBlur.value = cfg.dofMaxBlur;
+            }
+        }
+
+        // Contact Shadows
+        if (this._contactShadowPass) {
+            this._contactShadowPass.enabled = cfg.contactShadows;
+            if (cfg.contactShadows) {
+                this._contactShadowPass.maxSteps = cfg.contactShadowSteps;
+                this._contactShadowPass.shadowStrength = cfg.contactShadowStrength;
+                this._contactShadowPass._material.uniforms.uMaxSteps.value = cfg.contactShadowSteps;
+                this._contactShadowPass._material.uniforms.uShadowStrength.value = cfg.contactShadowStrength;
+            }
+        }
+
+        // Cloud Shadows (triplanar material uniform)
+        if (this._triplanarMaterial && this._triplanarMaterial.uniforms) {
+            if (this._triplanarMaterial.uniforms.uCloudShadowEnabled) {
+                this._triplanarMaterial.uniforms.uCloudShadowEnabled.value = cfg.cloudShadows ? 1.0 : 0.0;
+            }
+            if (this._triplanarMaterial.uniforms.uCausticsEnabled) {
+                this._triplanarMaterial.uniforms.uCausticsEnabled.value = cfg.waterCaustics ? 1.0 : 0.0;
+            }
+        }
+
+        // SSGI
+        if (this._ssgiPass) {
+            this._ssgiPass.enabled = cfg.ssgi;
+            if (cfg.ssgi) {
+                this._ssgiPass.rayCount = cfg.ssgiRays;
+                this._ssgiPass.maxSteps = cfg.ssgiSteps;
+                this._ssgiPass.intensity = cfg.ssgiIntensity;
+                this._ssgiPass._material.uniforms.uRayCount.value = cfg.ssgiRays;
+                this._ssgiPass._material.uniforms.uMaxSteps.value = cfg.ssgiSteps;
+                this._ssgiPass._material.uniforms.uIntensity.value = cfg.ssgiIntensity;
+            }
+        }
+
+        // Crepuscular rays cloud occlusion (tied to atmosphere quality)
+        if (this._atmospherePass && this._atmospherePass._material) {
+            const cloudOcclusion = this.currentTier <= QUALITY_TIERS.HIGH ? 1.0 : 0.0;
+            if (this._atmospherePass._material.uniforms.uCloudOcclusionEnabled) {
+                this._atmospherePass._material.uniforms.uCloudOcclusionEnabled.value = cloudOcclusion;
+            }
+        }
+
+        // Weather system particle multiplier
+        if (this._weatherSystem) {
+            this._weatherSystem.setParticleMultiplier(cfg.particleMultiplier);
         }
     }
 

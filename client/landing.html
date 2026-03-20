@@ -286,6 +286,11 @@ import { AutoExposurePass } from './js/rendering/AutoExposurePass.js';
 import { VolumetricCloudPass } from './js/rendering/VolumetricClouds.js';
 import { TAAPass } from './js/rendering/TAAPass.js';
 import { WindField } from './js/rendering/WindField.js';
+import { MotionBlurPass } from './js/rendering/MotionBlurPass.js';
+import { DOFPass } from './js/rendering/DOFPass.js';
+import { ContactShadowPass } from './js/rendering/ContactShadowPass.js';
+import { SSGIPass } from './js/rendering/SSGIPass.js';
+import { WeatherSystem, WEATHER_STATE } from './js/rendering/WeatherSystem.js';
 import { eventBus } from './js/core/EventBus.js';
 import { PlanetTransition } from './js/core/PlanetTransition.js';
 
@@ -602,6 +607,36 @@ try {
 }
 const ssaoPass = gtaoPass; // backward-compat alias for PerformanceManager
 
+// 2026: Contact Shadows — fine screen-space shadows under rocks and in crevices
+let contactShadowPass = null;
+try {
+    contactShadowPass = new ContactShadowPass(camera, {
+        sunDirection: new THREE.Vector3(0.5, 0.3, 0.4).normalize(),
+        maxSteps: 12,
+        maxDistance: 2.0,
+        thickness: 0.1,
+        shadowStrength: 0.4,
+    });
+    composer.addPass(contactShadowPass);
+} catch (e) {
+    console.warn('[TGO] Contact shadows disabled:', e.message);
+}
+
+// 2026: SSGI — screen-space global illumination for indirect color bleeding
+let ssgiPass = null;
+try {
+    ssgiPass = new SSGIPass(camera, {
+        maxSteps: 12,
+        maxDistance: 10.0,
+        thickness: 0.5,
+        intensity: 0.4,
+        rayCount: 4,
+    });
+    composer.addPass(ssgiPass);
+} catch (e) {
+    console.warn('[TGO] SSGI disabled:', e.message);
+}
+
 // Ray-marched atmosphere — volumetric scattering, aerial perspective, god rays
 let atmospherePass = null;
 try {
@@ -683,9 +718,38 @@ try {
     console.warn('[TGO] Auto-exposure disabled:', e.message);
 }
 
+// 2026: Depth of Field — bokeh blur for cinematic focus
+let dofPass = null;
+try {
+    dofPass = new DOFPass(camera, {
+        focalDistance: 30.0,
+        focalLength: 50.0,
+        aperture: 2.8,
+        maxBlur: 8.0,
+        samples: 16,
+        autoFocus: true,
+    });
+    composer.addPass(dofPass);
+} catch (e) {
+    console.warn('[TGO] DOF disabled:', e.message);
+}
+
 // Color grading — the "painted sci-fi" look
 const colorGradePass = new ShaderPass(colorGradeShader);
 composer.addPass(colorGradePass);
+
+// 2026: Motion Blur — camera velocity-based per-pixel blur
+let motionBlurPass = null;
+try {
+    motionBlurPass = new MotionBlurPass(camera, {
+        velocityScale: 1.0,
+        maxBlurRadius: 20.0,
+        samples: 8,
+    });
+    composer.addPass(motionBlurPass);
+} catch (e) {
+    console.warn('[TGO] Motion blur disabled:', e.message);
+}
 
 // Film grain — 70s sci-fi texture, stronger in dark areas
 composer.addPass(filmGrainPass);
@@ -843,6 +907,21 @@ const perfManager = new PerformanceManager(renderer);
 // Wire perf manager to post-processing passes (so tier changes actually take effect)
 perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass);
 
+// 2026: Procedural Weather System — state machine driving all atmosphere subsystems
+let weatherSystem = null;
+try {
+    weatherSystem = new WeatherSystem({
+        scene: scene,
+        volumetricClouds: volumetricClouds,
+        atmospherePass: atmospherePass,
+        triplanarMaterial: triplanarMaterial,
+        windField: windField,
+        skyDome: skyDome,
+    });
+} catch (e) {
+    console.warn('[TGO] Weather system disabled:', e.message);
+}
+
 // Wire 2026 pipeline passes to perf manager
 perfManager.applyToNewPasses({
     taaPass: taaPass,
@@ -852,6 +931,13 @@ perfManager.applyToNewPasses({
     atmospherePass: atmospherePass,
     skyDome: skyDome,
     csmManager: csmManager,
+    // 8 new rendering features
+    motionBlurPass: motionBlurPass,
+    dofPass: dofPass,
+    contactShadowPass: contactShadowPass,
+    ssgiPass: ssgiPass,
+    weatherSystem: weatherSystem,
+    triplanarMaterial: triplanarMaterial,
 });
 
 // Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
@@ -1790,7 +1876,19 @@ function animate() {
     if (windField) windField.update(dt, camera.position);
     if (triplanarMaterial && triplanarMaterial.uniforms) {
         triplanarMaterial.uniforms.uTime.value = t;
+        // Sync cloud shadow wind offset from volumetric clouds
+        if (volumetricClouds && triplanarMaterial.uniforms.uCloudWindOffset) {
+            triplanarMaterial.uniforms.uCloudWindOffset.value.copy(volumetricClouds._windOffset);
+        }
     }
+    // Sync atmosphere cloud occlusion wind offset
+    if (atmospherePass && volumetricClouds && atmospherePass._material) {
+        if (atmospherePass._material.uniforms.uCloudWindOffset) {
+            atmospherePass._material.uniforms.uCloudWindOffset.value.copy(volumetricClouds._windOffset);
+        }
+    }
+    // Weather system update
+    if (weatherSystem) weatherSystem.update(dt, camera.position);
 
     // Render with full post-processing pipeline
     // TAA jitter: offset camera projection before render, restore after
@@ -1836,6 +1934,8 @@ window._debug = {
     get perf() { return perfManager; },
     get csm() { return csmManager; },
     get phase() { return currentPhase; },
+    get weather() { return weatherSystem; },
+    setWeather: (state) => weatherSystem && weatherSystem.setWeather(state),
     warpTo: (rule, seed) => planetTransition.execute(rule, seed),
 };
 

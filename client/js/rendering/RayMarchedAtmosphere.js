@@ -83,6 +83,12 @@ export class RayMarchedAtmospherePass extends Pass {
                 uRaySteps: { value: this.raySteps },
                 uTime: { value: 0 },
                 uResolution: { value: new THREE.Vector2() },
+                // Crepuscular rays through clouds (Feature 7)
+                uCloudOcclusionEnabled: { value: 1.0 },
+                uCloudWindOffset: { value: new THREE.Vector2() },
+                uCloudBase: { value: 80.0 },
+                uCloudTop: { value: 200.0 },
+                uCloudCoverage: { value: 0.45 },
             },
             vertexShader: /* glsl */ `
                 varying vec2 vUv;
@@ -114,6 +120,12 @@ export class RayMarchedAtmospherePass extends Pass {
                 uniform float uRaySteps;
                 uniform float uTime;
                 uniform vec2 uResolution;
+                // Cloud occlusion for crepuscular rays
+                uniform float uCloudOcclusionEnabled;
+                uniform vec2 uCloudWindOffset;
+                uniform float uCloudBase;
+                uniform float uCloudTop;
+                uniform float uCloudCoverage;
 
                 varying vec2 vUv;
 
@@ -195,7 +207,39 @@ export class RayMarchedAtmospherePass extends Pass {
                 }
 
                 // ============================================================
-                // GOD RAYS (screen-space radial blur)
+                // CLOUD DENSITY (simplified 3-octave for god ray occlusion)
+                // ============================================================
+
+                float hash2D(vec2 p) {
+                    float h = dot(p, vec2(127.1, 311.7));
+                    return fract(sin(h) * 43758.5453123);
+                }
+
+                float noise2D(vec2 p) {
+                    vec2 i = floor(p);
+                    vec2 f = fract(p);
+                    f = f * f * (3.0 - 2.0 * f);
+                    float a = hash2D(i);
+                    float b = hash2D(i + vec2(1.0, 0.0));
+                    float c = hash2D(i + vec2(0.0, 1.0));
+                    float d = hash2D(i + vec2(1.0, 1.0));
+                    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+                }
+
+                float sampleCloudDensitySimple(vec2 cloudUV) {
+                    float density = 0.0;
+                    float amp = 0.5;
+                    float freq = 1.0;
+                    for (int i = 0; i < 3; i++) {
+                        density += amp * noise2D(cloudUV * freq * 400.0);
+                        freq *= 2.17;
+                        amp *= 0.47;
+                    }
+                    return smoothstep(1.0 - uCloudCoverage, 1.0 - uCloudCoverage + 0.3, density);
+                }
+
+                // ============================================================
+                // GOD RAYS (screen-space radial blur with cloud occlusion)
                 // ============================================================
 
                 float computeGodRays(vec2 uv) {
@@ -212,6 +256,27 @@ export class RayMarchedAtmospherePass extends Pass {
                         // Sample depth — sky pixels (far) contribute to god rays
                         float d = texture2D(tDepth, clampedUV).x;
                         float isSky = step(0.999, d); // 1.0 for sky, 0.0 for geometry
+
+                        // Cloud occlusion: if sky pixel, check if cloud blocks light
+                        if (isSky > 0.5 && uCloudOcclusionEnabled > 0.5) {
+                            // Compute world direction for this sample UV
+                            vec4 sampleNDC = vec4(clampedUV * 2.0 - 1.0, 1.0, 1.0);
+                            vec4 sampleView = uInverseProjection * sampleNDC;
+                            sampleView /= sampleView.w;
+                            vec3 sampleDir = normalize((uInverseView * vec4(sampleView.xyz, 0.0)).xyz);
+
+                            // Intersect with cloud midplane
+                            float cloudMid = (uCloudBase + uCloudTop) * 0.5;
+                            float tHit = (cloudMid - uCameraPosition.y) / sampleDir.y;
+                            if (tHit > 0.0) {
+                                vec3 cloudPos = uCameraPosition + sampleDir * tHit;
+                                vec2 cloudUV = cloudPos.xz * 0.002 + uCloudWindOffset * 0.002;
+                                float cloudDensity = sampleCloudDensitySimple(cloudUV);
+                                isSky *= (1.0 - cloudDensity * 2.0);
+                                isSky = max(isSky, 0.0);
+                            }
+                        }
+
                         illumination += isSky * decay;
                         decay *= 0.94;
                     }

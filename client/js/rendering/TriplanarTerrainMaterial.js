@@ -61,6 +61,21 @@ export function createTriplanarTerrainMaterial(options = {}) {
             uSkyColor: { value: skyColor },
             uTime: { value: 0.0 },
             uDetailScale: { value: 1.0 },
+            // Cloud shadows (Feature 4)
+            uCloudShadowEnabled: { value: 1.0 },
+            uCloudWindOffset: { value: new THREE.Vector2() },
+            uCloudBase: { value: 80.0 },
+            uCloudTop: { value: 200.0 },
+            uCloudCoverage: { value: 0.45 },
+            uCloudShadowStrength: { value: 0.35 },
+            // Water caustics (Feature 5)
+            uCausticsEnabled: { value: 1.0 },
+            uWaterLevel: { value: 0.0 },
+            uCausticsIntensity: { value: 0.3 },
+            uCausticsScale: { value: 0.15 },
+            uCausticsSpeed: { value: 0.8 },
+            // Wetness (Feature 8 - Weather System)
+            uWetness: { value: 0.0 },
         },
         vertexShader: TRIPLANAR_VERTEX,
         fragmentShader: TRIPLANAR_FRAGMENT,
@@ -120,6 +135,21 @@ const TRIPLANAR_FRAGMENT = /* glsl */ `
     uniform vec3 uSkyColor;
     uniform float uTime;
     uniform float uDetailScale;
+    // Cloud shadows
+    uniform float uCloudShadowEnabled;
+    uniform vec2 uCloudWindOffset;
+    uniform float uCloudBase;
+    uniform float uCloudTop;
+    uniform float uCloudCoverage;
+    uniform float uCloudShadowStrength;
+    // Water caustics
+    uniform float uCausticsEnabled;
+    uniform float uWaterLevel;
+    uniform float uCausticsIntensity;
+    uniform float uCausticsScale;
+    uniform float uCausticsSpeed;
+    // Wetness
+    uniform float uWetness;
 
     varying vec3 vWorldPosition;
     varying vec3 vWorldNormal;
@@ -308,6 +338,55 @@ const TRIPLANAR_FRAGMENT = /* glsl */ `
     }
 
     // ============================================================
+    // CLOUD SHADOWS (Feature 4)
+    // ============================================================
+
+    float sampleCloudShadow(vec3 worldPos) {
+        if (uCloudShadowEnabled < 0.5) return 0.0;
+
+        // Project fragment XZ to cloud midplane altitude
+        float cloudMid = (uCloudBase + uCloudTop) * 0.5;
+        vec2 cloudUV = worldPos.xz * 0.002 + uCloudWindOffset * 0.002;
+
+        // Simplified 3-octave FBM (cheaper than volumetric 5-octave)
+        float density = 0.0;
+        float amp = 0.5;
+        float freq = 1.0;
+        for (int i = 0; i < 3; i++) {
+            density += amp * noise2D(cloudUV * freq * 400.0);
+            freq *= 2.17;
+            amp *= 0.47;
+        }
+
+        // Apply coverage threshold
+        density = smoothstep(1.0 - uCloudCoverage, 1.0 - uCloudCoverage + 0.3, density);
+        return density;
+    }
+
+    // ============================================================
+    // WATER CAUSTICS (Feature 5)
+    // ============================================================
+
+    float causticPattern(vec2 uv, float time) {
+        // Two animated noise layers at different rotations
+        float s = sin(0.5236); // ~30 degrees
+        float c = cos(0.5236);
+
+        vec2 uv1 = uv * 1.0;
+        vec2 uv2 = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c) * 1.3;
+
+        // Animate each layer at different speeds
+        float layer1 = noise2D(uv1 + vec2(time * 0.3, time * 0.2));
+        float layer2 = noise2D(uv2 + vec2(-time * 0.25, time * 0.35));
+
+        // Intersect layers to create web pattern
+        float pattern = max(layer1, layer2);
+        pattern = smoothstep(0.45, 0.65, pattern);
+
+        return pattern;
+    }
+
+    // ============================================================
     // MAIN
     // ============================================================
 
@@ -378,7 +457,10 @@ const TRIPLANAR_FRAGMENT = /* glsl */ `
         baseRoughness = mix(baseRoughness, 0.4, frostFactor * 0.4);
         // Micro roughness variation
         baseRoughness += (microDetail - 0.5) * 0.1;
+        // Wetness reduces roughness and darkens surface (Weather System)
+        baseRoughness -= uWetness * 0.4;
         baseRoughness = clamp(baseRoughness, 0.15, 1.0);
+        baseColor *= (1.0 - uWetness * 0.15);
 
         float metalness = 0.02; // Terrain is non-metallic
         // Wet rock gets slightly more reflective
@@ -404,6 +486,21 @@ const TRIPLANAR_FRAGMENT = /* glsl */ `
         vec3 diffuse = kD * baseColor / 3.14159265;
 
         vec3 directLight = (diffuse + specular) * uSunColor * NdotL * 2.5;
+
+        // ---- CLOUD SHADOWS (Feature 4) ----
+        float cloudShadow = sampleCloudShadow(vWorldPosition);
+        directLight *= (1.0 - cloudShadow * uCloudShadowStrength);
+
+        // ---- WATER CAUSTICS (Feature 5) ----
+        if (uCausticsEnabled > 0.5 && vWorldPosition.y < uWaterLevel + 2.0) {
+            float depthBelow = uWaterLevel - vWorldPosition.y;
+            float causticFade = smoothstep(-0.5, 3.0, depthBelow) * smoothstep(12.0, 4.0, depthBelow);
+            float caustics = causticPattern(
+                vWorldPosition.xz * uCausticsScale,
+                uTime * uCausticsSpeed
+            );
+            directLight += uSunColor * caustics * uCausticsIntensity * causticFade;
+        }
 
         // ---- AMBIENT LIGHTING (hemisphere) ----
         float upFactor = dot(finalNormal, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
