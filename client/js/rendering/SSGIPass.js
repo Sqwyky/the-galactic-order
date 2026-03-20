@@ -13,6 +13,7 @@
 
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { GLSL_DEPTH, GLSL_PROJECT } from './shaders/CommonGLSL.js';
 
 export class SSGIPass extends Pass {
     /**
@@ -99,20 +100,7 @@ export class SSGIPass extends Pass {
                     );
                 }
 
-                float getLinearDepth(vec2 uv) {
-                    float fragDepth = texture2D(tDepth, uv).x;
-                    return (uCameraNear * uCameraFar) /
-                        (uCameraFar - fragDepth * (uCameraFar - uCameraNear));
-                }
-
-                vec3 getWorldPosition(vec2 uv) {
-                    float depth = texture2D(tDepth, uv).x;
-                    vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-                    vec4 viewPos = uInverseProjection * ndc;
-                    viewPos /= viewPos.w;
-                    vec4 worldPos = uInverseView * viewPos;
-                    return worldPos.xyz;
-                }
+                ${GLSL_DEPTH}
 
                 // Reconstruct normal from depth buffer using cross product of gradients
                 vec3 reconstructNormal(vec2 uv) {
@@ -123,12 +111,7 @@ export class SSGIPass extends Pass {
                     return normalize(cross(posR - posC, posU - posC));
                 }
 
-                vec2 projectToScreen(vec3 worldPos) {
-                    vec4 viewPos = uViewMatrix * vec4(worldPos, 1.0);
-                    vec4 clipPos = uProjectionMatrix * viewPos;
-                    vec2 ndc = clipPos.xy / clipPos.w;
-                    return ndc * 0.5 + 0.5;
-                }
+                ${GLSL_PROJECT}
 
                 // Generate a cosine-weighted hemisphere direction
                 vec3 cosineHemisphere(vec3 normal, vec2 rand) {

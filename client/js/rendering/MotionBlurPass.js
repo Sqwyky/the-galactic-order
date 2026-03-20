@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { GLSL_DEPTH } from './shaders/CommonGLSL.js';
 
 export class MotionBlurPass extends Pass {
     /**
@@ -73,14 +74,7 @@ export class MotionBlurPass extends Pass {
 
                 varying vec2 vUv;
 
-                vec3 getWorldPosition(vec2 uv) {
-                    float depth = texture2D(tDepth, uv).x;
-                    vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-                    vec4 viewPos = uInverseProjection * ndc;
-                    viewPos /= viewPos.w;
-                    vec4 worldPos = uInverseView * viewPos;
-                    return worldPos.xyz;
-                }
+                ${GLSL_DEPTH}
 
                 void main() {
                     float rawDepth = texture2D(tDepth, vUv).x;

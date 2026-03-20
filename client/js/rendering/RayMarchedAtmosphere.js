@@ -21,6 +21,7 @@
 
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { GLSL_NOISE_2D, GLSL_FBM_CLOUD } from './shaders/CommonGLSL.js';
 
 // ============================================================
 // RAY-MARCHED ATMOSPHERE PASS
@@ -207,36 +208,11 @@ export class RayMarchedAtmospherePass extends Pass {
                 }
 
                 // ============================================================
-                // CLOUD DENSITY (simplified 3-octave for god ray occlusion)
+                // CLOUD DENSITY (shared from CommonGLSL)
                 // ============================================================
 
-                float hash2D(vec2 p) {
-                    float h = dot(p, vec2(127.1, 311.7));
-                    return fract(sin(h) * 43758.5453123);
-                }
-
-                float noise2D(vec2 p) {
-                    vec2 i = floor(p);
-                    vec2 f = fract(p);
-                    f = f * f * (3.0 - 2.0 * f);
-                    float a = hash2D(i);
-                    float b = hash2D(i + vec2(1.0, 0.0));
-                    float c = hash2D(i + vec2(0.0, 1.0));
-                    float d = hash2D(i + vec2(1.0, 1.0));
-                    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-                }
-
-                float sampleCloudDensitySimple(vec2 cloudUV) {
-                    float density = 0.0;
-                    float amp = 0.5;
-                    float freq = 1.0;
-                    for (int i = 0; i < 3; i++) {
-                        density += amp * noise2D(cloudUV * freq * 400.0);
-                        freq *= 2.17;
-                        amp *= 0.47;
-                    }
-                    return smoothstep(1.0 - uCloudCoverage, 1.0 - uCloudCoverage + 0.3, density);
-                }
+                ${GLSL_NOISE_2D}
+                ${GLSL_FBM_CLOUD}
 
                 // ============================================================
                 // GOD RAYS (screen-space radial blur with cloud occlusion)
@@ -397,6 +373,24 @@ export class RayMarchedAtmospherePass extends Pass {
                 this.godRayStrength = 0.0; // Skip god rays on low
                 break;
         }
+    }
+
+    setCloudOcclusion(enabled) {
+        this._material.uniforms.uCloudOcclusionEnabled.value = enabled ? 1.0 : 0.0;
+    }
+
+    /**
+     * Set the cloud wind offset for crepuscular ray cloud occlusion.
+     * Should be synced from VolumetricClouds.windOffset each frame.
+     * @param {THREE.Vector2} offset
+     */
+    setCloudWindOffset(offset) {
+        this._material.uniforms.uCloudWindOffset.value.copy(offset);
+    }
+
+    setWeatherParams(params) {
+        if (params.fogDensity !== undefined) this.fogDensity = params.fogDensity;
+        if (params.godRayStrength !== undefined) this.godRayStrength = params.godRayStrength;
     }
 
     render(renderer, writeBuffer, readBuffer /*, deltaTime, maskActive */) {

@@ -4,21 +4,26 @@
  * Adaptive quality system that keeps the game running smooth
  * on everything from gaming PCs to Chromebooks.
  *
- * Monitors FPS and automatically adjusts rendering quality:
- * - Post-processing passes (GTAO, bloom, film grain)
- * - Particle counts (atmospheric, mining, deconstruction)
+ * Monitors FPS and automatically adjusts rendering quality across
+ * the full pipeline:
+ * - Post-processing passes (GTAO, bloom, film grain, TAA, SSR, SSGI,
+ *   motion blur, DOF, contact shadows, atmosphere, volumetric clouds)
+ * - Terrain material features (cloud shadows, water caustics)
+ * - Particle counts (atmospheric, mining, weather)
  * - Vegetation density (grass, flora)
  * - Draw distance (terrain chunk radius)
+ *
+ * All pass communication uses public APIs (setQuality, setWeatherParams,
+ * etc.) — never reaches into _material.uniforms directly.
  *
  * Can be manually overridden via window._debug.perf.setQuality('LOW')
  *
  * Integration:
  *   const perf = new PerformanceManager(renderer);
+ *   // After composer is built — single unified call:
+ *   perf.registerPasses({ composer, ssaoPass, bloomPass, ... });
  *   // In game loop:
  *   perf.update(dt);
- *   // After composer is built:
- *   perf.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass);
- *   // Other systems read perf.settings each frame.
  */
 
 // ============================================================
@@ -559,54 +564,69 @@ export class PerformanceManager {
     // ================================================================
 
     /**
-     * Register the EffectComposer and its individual passes so the
-     * PerformanceManager can directly enable/disable them on tier changes.
+     * Register all rendering passes for quality management.
+     * Call once after the full composer pipeline is built.
      *
-     * Call this once, after the composer pipeline is built.
-     *
-     * @param {EffectComposer} composer
-     * @param {GTAOPass}       ssaoPass - GTAO pass (backward-compat param name)
-     * @param {UnrealBloomPass} bloomPass
-     * @param {ShaderPass}     filmGrainPass
-     * @param {ShaderPass}     [colorGradePass] - optional; if omitted, color grade stays always-on
+     * @param {Object} passes - All pass references (any may be omitted)
+     * @param {EffectComposer} [passes.composer]
+     * @param {GTAOPass}       [passes.ssaoPass]
+     * @param {UnrealBloomPass} [passes.bloomPass]
+     * @param {ShaderPass}     [passes.filmGrainPass]
+     * @param {ShaderPass}     [passes.colorGradePass]
+     * @param {TAAPass}        [passes.taaPass]
+     * @param {SSRPass}        [passes.ssrPass]
+     * @param {AutoExposurePass} [passes.autoExposure]
+     * @param {VolumetricCloudPass} [passes.volumetricClouds]
+     * @param {RayMarchedAtmospherePass} [passes.atmospherePass]
+     * @param {SkyDome}        [passes.skyDome]
+     * @param {CSMManager}     [passes.csmManager]
+     * @param {MotionBlurPass} [passes.motionBlurPass]
+     * @param {DOFPass}        [passes.dofPass]
+     * @param {ContactShadowPass} [passes.contactShadowPass]
+     * @param {SSGIPass}       [passes.ssgiPass]
+     * @param {WeatherSystem}  [passes.weatherSystem]
+     * @param {THREE.ShaderMaterial} [passes.triplanarMaterial]
      */
-    applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass) {
-        this._composer       = composer;
-        this._ssaoPass       = ssaoPass;
-        this._bloomPass      = bloomPass;
-        this._filmGrainPass  = filmGrainPass;
-        this._colorGradePass = colorGradePass || null;
+    registerPasses(passes = {}) {
+        // Core composer passes
+        if (passes.composer !== undefined) this._composer = passes.composer;
+        if (passes.ssaoPass !== undefined) this._ssaoPass = passes.ssaoPass;
+        if (passes.bloomPass !== undefined) this._bloomPass = passes.bloomPass;
+        if (passes.filmGrainPass !== undefined) this._filmGrainPass = passes.filmGrainPass;
+        if (passes.colorGradePass !== undefined) this._colorGradePass = passes.colorGradePass;
 
-        // Apply current tier to the passes right away
+        // 2026 pipeline passes
+        if (passes.taaPass !== undefined) this._taaPass = passes.taaPass;
+        if (passes.ssrPass !== undefined) this._ssrPass = passes.ssrPass;
+        if (passes.autoExposure !== undefined) this._autoExposure = passes.autoExposure;
+        if (passes.volumetricClouds !== undefined) this._volumetricClouds = passes.volumetricClouds;
+        if (passes.atmospherePass !== undefined) this._atmospherePass = passes.atmospherePass;
+        if (passes.skyDome !== undefined) this._skyDome = passes.skyDome;
+        if (passes.csmManager !== undefined) this._csmManager = passes.csmManager;
+
+        // 8 new rendering features
+        if (passes.motionBlurPass !== undefined) this._motionBlurPass = passes.motionBlurPass;
+        if (passes.dofPass !== undefined) this._dofPass = passes.dofPass;
+        if (passes.contactShadowPass !== undefined) this._contactShadowPass = passes.contactShadowPass;
+        if (passes.ssgiPass !== undefined) this._ssgiPass = passes.ssgiPass;
+        if (passes.weatherSystem !== undefined) this._weatherSystem = passes.weatherSystem;
+        if (passes.triplanarMaterial !== undefined) this._triplanarMaterial = passes.triplanarMaterial;
+
         this._syncPasses();
     }
 
     /**
-     * Register the new 2026 rendering passes for quality management.
-     * Call after the composer pipeline is built with the new passes.
-     *
-     * @param {Object} passes
-     * @param {SSRPass} [passes.ssrPass]
-     * @param {AutoExposurePass} [passes.autoExposure]
-     * @param {VolumetricCloudPass} [passes.volumetricClouds]
-     * @param {RayMarchedAtmospherePass} [passes.atmospherePass]
+     * @deprecated Use registerPasses() instead. Kept for backward compatibility.
+     */
+    applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass) {
+        this.registerPasses({ composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass });
+    }
+
+    /**
+     * @deprecated Use registerPasses() instead. Kept for backward compatibility.
      */
     applyToNewPasses(passes = {}) {
-        this._taaPass = passes.taaPass || null;
-        this._ssrPass = passes.ssrPass || null;
-        this._autoExposure = passes.autoExposure || null;
-        this._volumetricClouds = passes.volumetricClouds || null;
-        this._atmospherePass = passes.atmospherePass || null;
-        this._skyDome = passes.skyDome || null;
-        this._csmManager = passes.csmManager || null;
-        // 8 new rendering features
-        this._motionBlurPass = passes.motionBlurPass || null;
-        this._dofPass = passes.dofPass || null;
-        this._contactShadowPass = passes.contactShadowPass || null;
-        this._ssgiPass = passes.ssgiPass || null;
-        this._weatherSystem = passes.weatherSystem || null;
-        this._triplanarMaterial = passes.triplanarMaterial || null;
-        this._syncPasses();
+        this.registerPasses(passes);
     }
 
     /**
@@ -723,70 +743,39 @@ export class PerformanceManager {
             this._csmManager.setQuality(tierName);
         }
 
-        // ---- 8 New Rendering Features ----
+        // ---- 8 New Rendering Features (via public APIs) ----
 
-        // Motion Blur
+        // Motion Blur — uses setQuality() which handles enabled + uniforms
         if (this._motionBlurPass) {
-            this._motionBlurPass.enabled = cfg.motionBlur;
-            if (cfg.motionBlur) {
-                this._motionBlurPass.samples = cfg.motionBlurSamples;
-                this._motionBlurPass.velocityScale = cfg.motionBlurScale;
-                this._motionBlurPass._material.uniforms.uSamples.value = cfg.motionBlurSamples;
-                this._motionBlurPass._material.uniforms.uVelocityScale.value = cfg.motionBlurScale;
-            }
+            this._motionBlurPass.setQuality(tierName.toLowerCase());
         }
 
-        // Depth of Field
+        // Depth of Field — uses setQuality() which handles enabled + uniforms
         if (this._dofPass) {
-            this._dofPass.enabled = cfg.dof;
-            if (cfg.dof) {
-                this._dofPass.samples = cfg.dofSamples;
-                this._dofPass.maxBlur = cfg.dofMaxBlur;
-                this._dofPass._material.uniforms.uSamples.value = cfg.dofSamples;
-                this._dofPass._material.uniforms.uMaxBlur.value = cfg.dofMaxBlur;
-            }
+            this._dofPass.setQuality(tierName.toLowerCase());
         }
 
-        // Contact Shadows
+        // Contact Shadows — uses setQuality() which handles enabled + uniforms
         if (this._contactShadowPass) {
-            this._contactShadowPass.enabled = cfg.contactShadows;
-            if (cfg.contactShadows) {
-                this._contactShadowPass.maxSteps = cfg.contactShadowSteps;
-                this._contactShadowPass.shadowStrength = cfg.contactShadowStrength;
-                this._contactShadowPass._material.uniforms.uMaxSteps.value = cfg.contactShadowSteps;
-                this._contactShadowPass._material.uniforms.uShadowStrength.value = cfg.contactShadowStrength;
-            }
+            this._contactShadowPass.setQuality(tierName.toLowerCase());
         }
 
-        // Cloud Shadows (triplanar material uniform)
-        if (this._triplanarMaterial && this._triplanarMaterial.uniforms) {
-            if (this._triplanarMaterial.uniforms.uCloudShadowEnabled) {
-                this._triplanarMaterial.uniforms.uCloudShadowEnabled.value = cfg.cloudShadows ? 1.0 : 0.0;
-            }
-            if (this._triplanarMaterial.uniforms.uCausticsEnabled) {
-                this._triplanarMaterial.uniforms.uCausticsEnabled.value = cfg.waterCaustics ? 1.0 : 0.0;
-            }
+        // Cloud Shadows & Water Caustics (triplanar material public API)
+        if (this._triplanarMaterial && this._triplanarMaterial.setWeatherParams) {
+            this._triplanarMaterial.setWeatherParams({
+                cloudShadows: cfg.cloudShadows,
+                caustics: cfg.waterCaustics,
+            });
         }
 
-        // SSGI
+        // SSGI — uses setQuality() which handles enabled + uniforms
         if (this._ssgiPass) {
-            this._ssgiPass.enabled = cfg.ssgi;
-            if (cfg.ssgi) {
-                this._ssgiPass.rayCount = cfg.ssgiRays;
-                this._ssgiPass.maxSteps = cfg.ssgiSteps;
-                this._ssgiPass.intensity = cfg.ssgiIntensity;
-                this._ssgiPass._material.uniforms.uRayCount.value = cfg.ssgiRays;
-                this._ssgiPass._material.uniforms.uMaxSteps.value = cfg.ssgiSteps;
-                this._ssgiPass._material.uniforms.uIntensity.value = cfg.ssgiIntensity;
-            }
+            this._ssgiPass.setQuality(tierName.toLowerCase());
         }
 
-        // Crepuscular rays cloud occlusion (tied to atmosphere quality)
-        if (this._atmospherePass && this._atmospherePass._material) {
-            const cloudOcclusion = this.currentTier <= QUALITY_TIERS.HIGH ? 1.0 : 0.0;
-            if (this._atmospherePass._material.uniforms.uCloudOcclusionEnabled) {
-                this._atmospherePass._material.uniforms.uCloudOcclusionEnabled.value = cloudOcclusion;
-            }
+        // Crepuscular rays cloud occlusion (atmosphere public API)
+        if (this._atmospherePass && this._atmospherePass.setCloudOcclusion) {
+            this._atmospherePass.setCloudOcclusion(this.currentTier <= QUALITY_TIERS.HIGH);
         }
 
         // Weather system particle multiplier

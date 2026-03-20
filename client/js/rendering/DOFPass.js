@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { GLSL_DEPTH } from './shaders/CommonGLSL.js';
 
 export class DOFPass extends Pass {
     /**
@@ -71,11 +72,7 @@ export class DOFPass extends Pass {
 
                 varying vec2 vUv;
 
-                float getLinearDepth(vec2 uv) {
-                    float fragDepth = texture2D(tDepth, uv).x;
-                    return (uCameraNear * uCameraFar) /
-                        (uCameraFar - fragDepth * (uCameraFar - uCameraNear));
-                }
+                ${GLSL_DEPTH}
 
                 // Compute Circle of Confusion radius
                 float computeCoC(float depth) {

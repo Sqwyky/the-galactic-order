@@ -904,9 +904,6 @@ tablet.setInventory(inventory);
 // Performance manager — adaptive quality that looks good on ALL devices
 const perfManager = new PerformanceManager(renderer);
 
-// Wire perf manager to post-processing passes (so tier changes actually take effect)
-perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass);
-
 // 2026: Procedural Weather System — state machine driving all atmosphere subsystems
 let weatherSystem = null;
 try {
@@ -922,22 +919,13 @@ try {
     console.warn('[TGO] Weather system disabled:', e.message);
 }
 
-// Wire 2026 pipeline passes to perf manager
-perfManager.applyToNewPasses({
-    taaPass: taaPass,
-    ssrPass: ssrPass,
-    autoExposure: autoExposure,
-    volumetricClouds: volumetricClouds,
-    atmospherePass: atmospherePass,
-    skyDome: skyDome,
-    csmManager: csmManager,
-    // 8 new rendering features
-    motionBlurPass: motionBlurPass,
-    dofPass: dofPass,
-    contactShadowPass: contactShadowPass,
-    ssgiPass: ssgiPass,
-    weatherSystem: weatherSystem,
-    triplanarMaterial: triplanarMaterial,
+// Register all rendering passes with performance manager (single unified call)
+perfManager.registerPasses({
+    composer, ssaoPass, bloomPass, filmGrainPass, colorGradePass,
+    taaPass, ssrPass, autoExposure, volumetricClouds, atmospherePass,
+    skyDome, csmManager,
+    motionBlurPass, dofPass, contactShadowPass, ssgiPass,
+    weatherSystem, triplanarMaterial,
 });
 
 // Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
@@ -1877,15 +1865,13 @@ function animate() {
     if (triplanarMaterial && triplanarMaterial.uniforms) {
         triplanarMaterial.uniforms.uTime.value = t;
         // Sync cloud shadow wind offset from volumetric clouds
-        if (volumetricClouds && triplanarMaterial.uniforms.uCloudWindOffset) {
-            triplanarMaterial.uniforms.uCloudWindOffset.value.copy(volumetricClouds._windOffset);
+        if (volumetricClouds) {
+            triplanarMaterial.uniforms.uCloudWindOffset.value.copy(volumetricClouds.windOffset);
         }
     }
     // Sync atmosphere cloud occlusion wind offset
-    if (atmospherePass && volumetricClouds && atmospherePass._material) {
-        if (atmospherePass._material.uniforms.uCloudWindOffset) {
-            atmospherePass._material.uniforms.uCloudWindOffset.value.copy(volumetricClouds._windOffset);
-        }
+    if (atmospherePass && volumetricClouds) {
+        atmospherePass.setCloudWindOffset(volumetricClouds.windOffset);
     }
     // Weather system update
     if (weatherSystem) weatherSystem.update(dt, camera.position);

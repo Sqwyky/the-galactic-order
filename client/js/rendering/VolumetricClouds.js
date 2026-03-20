@@ -398,6 +398,32 @@ export class VolumetricCloudPass extends Pass {
         }
     }
 
+    /**
+     * Set weather-driven cloud parameters.
+     * Called by WeatherSystem during weather transitions.
+     * @param {Object} params
+     * @param {number} [params.coverage] - Cloud coverage (0-1)
+     * @param {number} [params.density] - Cloud density multiplier
+     */
+    setWeatherParams(params) {
+        if (params.coverage !== undefined) {
+            this.coverage = params.coverage;
+            this._material.uniforms.uCoverage.value = params.coverage;
+        }
+        if (params.density !== undefined) {
+            this.density = params.density;
+            this._material.uniforms.uDensity.value = params.density;
+        }
+    }
+
+    /**
+     * Get the current wind offset (for syncing cloud shadows and crepuscular rays).
+     * @returns {THREE.Vector2}
+     */
+    get windOffset() {
+        return this._windOffset;
+    }
+
     render(renderer, writeBuffer, readBuffer) {
         const uniforms = this._material.uniforms;
         uniforms.tDiffuse.value = readBuffer.texture;

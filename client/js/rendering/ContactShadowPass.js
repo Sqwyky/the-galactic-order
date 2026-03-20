@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { GLSL_DEPTH, GLSL_PROJECT } from './shaders/CommonGLSL.js';
 
 export class ContactShadowPass extends Pass {
     /**
@@ -80,27 +81,8 @@ export class ContactShadowPass extends Pass {
 
                 varying vec2 vUv;
 
-                float getLinearDepth(vec2 uv) {
-                    float fragDepth = texture2D(tDepth, uv).x;
-                    return (uCameraNear * uCameraFar) /
-                        (uCameraFar - fragDepth * (uCameraFar - uCameraNear));
-                }
-
-                vec3 getWorldPosition(vec2 uv) {
-                    float depth = texture2D(tDepth, uv).x;
-                    vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-                    vec4 viewPos = uInverseProjection * ndc;
-                    viewPos /= viewPos.w;
-                    vec4 worldPos = uInverseView * viewPos;
-                    return worldPos.xyz;
-                }
-
-                vec2 projectToScreen(vec3 worldPos) {
-                    vec4 viewPos = uViewMatrix * vec4(worldPos, 1.0);
-                    vec4 clipPos = uProjectionMatrix * viewPos;
-                    vec2 ndc = clipPos.xy / clipPos.w;
-                    return ndc * 0.5 + 0.5;
-                }
+                ${GLSL_DEPTH}
+                ${GLSL_PROJECT}
 
                 void main() {
                     vec4 sceneColor = texture2D(tDiffuse, vUv);

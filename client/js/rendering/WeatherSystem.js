@@ -2,11 +2,15 @@
  * THE GALACTIC ORDER - Procedural Weather System
  *
  * State-machine orchestrator that manages weather transitions and drives
- * parameters across all rendering subsystems. Not a shader itself — it
- * smoothly lerps uniforms and settings on VolumetricClouds, Atmosphere,
- * TriplanarTerrain, WindField, and SkyDome.
+ * parameters across all rendering subsystems via their public APIs:
+ * - VolumetricClouds.setWeatherParams() — coverage, density
+ * - RayMarchedAtmosphere.setWeatherParams() — fog density, god ray strength
+ * - TriplanarTerrainMaterial.setWetness() — terrain wetness
+ * - SkyDome.setDarkening() — sky color darkening
+ * - WindField — base/gust strength (direct property assignment)
  *
  * Weather states: CLEAR, OVERCAST, RAIN, STORM, SNOW, FOG
+ * Transitions smoothly over ~10 seconds using ease-in-out interpolation.
  *
  * Also manages weather particles (rain/snow) using a camera-relative
  * particle system similar to AtmosphericParticles.
@@ -419,31 +423,25 @@ export class WeatherSystem {
     _applyToSystems() {
         const p = this._currentParams;
 
-        // Volumetric Clouds
-        if (this._volumetricClouds) {
-            this._volumetricClouds.coverage = p.cloudCoverage;
-            this._volumetricClouds.density = p.cloudDensity;
-            if (this._volumetricClouds._material && this._volumetricClouds._material.uniforms) {
-                if (this._volumetricClouds._material.uniforms.uCoverage) {
-                    this._volumetricClouds._material.uniforms.uCoverage.value = p.cloudCoverage;
-                }
-                if (this._volumetricClouds._material.uniforms.uDensity) {
-                    this._volumetricClouds._material.uniforms.uDensity.value = p.cloudDensity;
-                }
-            }
+        // Volumetric Clouds (via public API)
+        if (this._volumetricClouds && this._volumetricClouds.setWeatherParams) {
+            this._volumetricClouds.setWeatherParams({
+                coverage: p.cloudCoverage,
+                density: p.cloudDensity,
+            });
         }
 
-        // Atmosphere
-        if (this._atmospherePass) {
-            this._atmospherePass.fogDensity = this._baseFogDensity * p.fogMultiplier;
-            this._atmospherePass.godRayStrength = p.godRayStrength;
+        // Atmosphere (via public API)
+        if (this._atmospherePass && this._atmospherePass.setWeatherParams) {
+            this._atmospherePass.setWeatherParams({
+                fogDensity: this._baseFogDensity * p.fogMultiplier,
+                godRayStrength: p.godRayStrength,
+            });
         }
 
-        // Triplanar terrain (wetness)
-        if (this._triplanarMaterial && this._triplanarMaterial.uniforms) {
-            if (this._triplanarMaterial.uniforms.uWetness) {
-                this._triplanarMaterial.uniforms.uWetness.value = p.wetness;
-            }
+        // Triplanar terrain wetness (via public API)
+        if (this._triplanarMaterial && this._triplanarMaterial.setWetness) {
+            this._triplanarMaterial.setWetness(p.wetness);
         }
 
         // Wind field

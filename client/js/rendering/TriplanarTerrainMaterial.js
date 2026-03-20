@@ -24,6 +24,12 @@
  *
  * Performance: Single ShaderMaterial per chunk, all computation in fragment
  * shader. No texture lookups = zero VRAM for terrain textures.
+ *
+ * The returned material has public API methods attached for external control:
+ * - setCloudShadowEnabled(bool) — toggle cloud shadows
+ * - setCausticsEnabled(bool) — toggle water caustics
+ * - setWetness(value) — set terrain wetness (0-1)
+ * - setWeatherParams({wetness, cloudShadows, caustics}) — convenience
  */
 
 import * as THREE from 'three';
@@ -82,6 +88,48 @@ export function createTriplanarTerrainMaterial(options = {}) {
         side: THREE.FrontSide,
         fog: false,
     });
+
+    // ---- Public API methods (attached to material instance) ----
+
+    /**
+     * Enable or disable cloud shadows on terrain.
+     * @param {boolean} enabled
+     */
+    material.setCloudShadowEnabled = function (enabled) {
+        this.uniforms.uCloudShadowEnabled.value = enabled ? 1.0 : 0.0;
+    };
+
+    /**
+     * Enable or disable water caustics on terrain.
+     * @param {boolean} enabled
+     */
+    material.setCausticsEnabled = function (enabled) {
+        this.uniforms.uCausticsEnabled.value = enabled ? 1.0 : 0.0;
+    };
+
+    /**
+     * Set terrain wetness (0 = dry, 1 = fully wet).
+     * Reduces roughness and darkens color.
+     * @param {number} value
+     */
+    material.setWetness = function (value) {
+        this.uniforms.uWetness.value = value;
+    };
+
+    /**
+     * Set weather-driven parameters on the terrain material.
+     * @param {Object} params
+     * @param {number} [params.wetness] - Terrain wetness (0-1)
+     * @param {boolean} [params.cloudShadows] - Enable cloud shadows
+     * @param {boolean} [params.caustics] - Enable water caustics
+     */
+    material.setWeatherParams = function (params) {
+        if (params.wetness !== undefined) this.setWetness(params.wetness);
+        if (params.cloudShadows !== undefined) this.setCloudShadowEnabled(params.cloudShadows);
+        if (params.caustics !== undefined) this.setCausticsEnabled(params.caustics);
+    };
+
+    return material;
 }
 
 // ============================================================

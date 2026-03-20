@@ -251,6 +251,25 @@ export class SkyDome {
         }
     }
 
+    /**
+     * Apply weather-driven sky darkening.
+     * Multiplies sky colors by the darkening factor (1.0 = normal, 0.3 = very dark/stormy).
+     * Called by WeatherSystem during weather transitions.
+     * @param {number} factor - Darkening multiplier (0-1)
+     */
+    setDarkening(factor) {
+        if (!this.material || !this.material.uniforms) return;
+        // Store original colors on first call
+        if (!this._originalTopColor) {
+            this._originalTopColor = this.topColor.clone();
+            this._originalMidColor = this.midColor.clone();
+            this._originalBottomColor = this.bottomColor.clone();
+        }
+        this.topColor.copy(this._originalTopColor).multiplyScalar(factor);
+        this.midColor.copy(this._originalMidColor).multiplyScalar(factor);
+        this.bottomColor.copy(this._originalBottomColor).multiplyScalar(factor);
+    }
+
     addToScene(scene) {
         scene.add(this.mesh);
         scene.background = null;
