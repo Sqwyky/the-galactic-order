@@ -504,6 +504,7 @@ export class PerformanceManager {
      * @param {RayMarchedAtmospherePass} [passes.atmospherePass]
      */
     applyToNewPasses(passes = {}) {
+        this._taaPass = passes.taaPass || null;
         this._ssrPass = passes.ssrPass || null;
         this._autoExposure = passes.autoExposure || null;
         this._volumetricClouds = passes.volumetricClouds || null;
@@ -577,6 +578,11 @@ export class PerformanceManager {
 
         // ---- New 2026 pipeline passes ----
         const tierName = TIER_NAMES[this.currentTier];
+
+        if (this._taaPass) {
+            // TAA: enabled on ULTRA/HIGH/MEDIUM, disabled on LOW/POTATO
+            this._taaPass.setQuality(tierName.toLowerCase());
+        }
 
         if (this._ssrPass) {
             // SSR: enabled on ULTRA/HIGH, disabled on MEDIUM and below
