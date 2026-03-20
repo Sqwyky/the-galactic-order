@@ -275,7 +275,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { RayMarchedAtmospherePass } from './js/rendering/RayMarchedAtmosphere.js';
 
 // 2026 Rendering Pipeline — best-in-class graphics
@@ -283,8 +283,10 @@ import { createTriplanarTerrainMaterial } from './js/rendering/TriplanarTerrainM
 import { SSRPass } from './js/rendering/SSRPass.js';
 import { AutoExposurePass } from './js/rendering/AutoExposurePass.js';
 import { VolumetricCloudPass } from './js/rendering/VolumetricClouds.js';
+import { TAAPass } from './js/rendering/TAAPass.js';
 import { WindField } from './js/rendering/WindField.js';
 import { eventBus } from './js/core/EventBus.js';
+import { PlanetTransition } from './js/core/PlanetTransition.js';
 
 // ============================================================
 // URL PARAMS — planet identity
@@ -572,19 +574,28 @@ camera.lookAt(0, 0, 0);
 // Finalize post-processing pipeline (needs camera + scene)
 composer.addPass(new RenderPass(scene, camera));
 
+// TAA — Temporal Anti-Aliasing: eliminates shimmer on vegetation and terrain edges
+const taaPass = new TAAPass(camera);
+composer.addPass(taaPass);
+
 // ============================================================
 // 2026 POST-PROCESSING PIPELINE (best-in-class)
-// Order: Render → SSAO → Atmosphere → Volumetric Clouds → SSR →
+// Order: Render → TAA → GTAO → Atmosphere → Volumetric Clouds → SSR →
 //        Bloom → Auto-Exposure → Color Grade → Film Grain → Output
 // ============================================================
 
-// SSAO — Screen-Space Ambient Occlusion: darkens crevices, adds depth everywhere
-const ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
-ssaoPass.kernelRadius = 12;
-ssaoPass.minDistance = 0.001;
-ssaoPass.maxDistance = 0.15;
-ssaoPass.output = SSAOPass.OUTPUT.Default;
-composer.addPass(ssaoPass);
+// GTAO — Ground Truth Ambient Occlusion: physically-based AO, darkens crevices, adds depth
+let gtaoPass = null;
+try {
+    gtaoPass = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
+    gtaoPass.output = GTAOPass.OUTPUT.Default;
+    gtaoPass.blendIntensity = 1.0;
+    gtaoPass.updateGtaoMaterial({ radius: 0.5, distanceExponent: 2, thickness: 10, scale: 1, samples: 16 });
+    composer.addPass(gtaoPass);
+} catch (e) {
+    console.warn('[TGO] GTAO pass disabled:', e.message);
+}
+const ssaoPass = gtaoPass; // backward-compat alias for PerformanceManager
 
 // Ray-marched atmosphere — volumetric scattering, aerial perspective, god rays
 let atmospherePass = null;
@@ -1511,6 +1522,7 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    if (gtaoPass) gtaoPass.setSize(window.innerWidth, window.innerHeight);
     if (atmospherePass) atmospherePass.setSize(window.innerWidth, window.innerHeight);
     if (volumetricClouds) volumetricClouds.setSize(window.innerWidth, window.innerHeight);
     if (ssrPass) ssrPass.setSize(window.innerWidth, window.innerHeight);

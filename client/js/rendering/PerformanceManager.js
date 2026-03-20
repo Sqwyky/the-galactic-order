@@ -5,7 +5,7 @@
  * on everything from gaming PCs to Chromebooks.
  *
  * Monitors FPS and automatically adjusts rendering quality:
- * - Post-processing passes (SSAO, bloom, film grain)
+ * - Post-processing passes (GTAO, bloom, film grain)
  * - Particle counts (atmospheric, mining, deconstruction)
  * - Vegetation density (grass, flora)
  * - Draw distance (terrain chunk radius)
@@ -59,12 +59,13 @@ const TIER_SETTINGS = {
             colorGrade: true,
         },
         bloomStrengthMultiplier: 1.0,
-        ssaoKernelRadius:        12,
+        gtaoSamples:             16,
+        gtaoRadius:              0.5,
         filmGrainIntensity:      0.025,
         saturationBoost:         1.3,
     },
 
-    // ---- HIGH: slight SSAO reduction, fewer particles ----
+    // ---- HIGH: slight GTAO reduction, fewer particles ----
     [QUALITY_TIERS.HIGH]: {
         particleMultiplier:   0.75,
         drawDistance:          5,
@@ -80,12 +81,13 @@ const TIER_SETTINGS = {
             colorGrade: true,
         },
         bloomStrengthMultiplier: 1.0,
-        ssaoKernelRadius:        8,
+        gtaoSamples:             8,
+        gtaoRadius:              0.4,
         filmGrainIntensity:      0.025,
         saturationBoost:         1.3,
     },
 
-    // ---- MEDIUM: no SSAO, bloom + grain preserved, halved particles ----
+    // ---- MEDIUM: no GTAO, bloom + grain preserved, halved particles ----
     [QUALITY_TIERS.MEDIUM]: {
         particleMultiplier:   0.5,
         drawDistance:          4,
@@ -101,9 +103,10 @@ const TIER_SETTINGS = {
             colorGrade: true,
         },
         bloomStrengthMultiplier: 0.7,
-        ssaoKernelRadius:        8,
+        gtaoSamples:             4,
+        gtaoRadius:              0.3,
         filmGrainIntensity:      0.02,
-        saturationBoost:         1.35,  // Slightly higher to compensate for no SSAO depth
+        saturationBoost:         1.35,  // Slightly higher to compensate for no GTAO depth
     },
 
     // ---- LOW: no SSAO, reduced bloom + grain, sparse grass ----
@@ -123,7 +126,8 @@ const TIER_SETTINGS = {
             colorGrade: true,
         },
         bloomStrengthMultiplier: 0.5,
-        ssaoKernelRadius:        4,
+        gtaoSamples:             4,
+        gtaoRadius:              0.3,
         filmGrainIntensity:      0.015,
         saturationBoost:         1.4,   // Higher saturation compensates for fewer visual layers
     },
@@ -144,7 +148,8 @@ const TIER_SETTINGS = {
             colorGrade: true,       // Color grade stays — always
         },
         bloomStrengthMultiplier: 0.35,
-        ssaoKernelRadius:        4,
+        gtaoSamples:             4,
+        gtaoRadius:              0.3,
         filmGrainIntensity:      0.012, // Subtle but present
         saturationBoost:         1.45,  // Extra pop to compensate for less geometry detail
     },
@@ -471,7 +476,7 @@ export class PerformanceManager {
      * Call this once, after the composer pipeline is built.
      *
      * @param {EffectComposer} composer
-     * @param {SSAOPass}       ssaoPass
+     * @param {GTAOPass}       ssaoPass - GTAO pass (backward-compat param name)
      * @param {UnrealBloomPass} bloomPass
      * @param {ShaderPass}     filmGrainPass
      * @param {ShaderPass}     [colorGradePass] - optional; if omitted, color grade stays always-on
@@ -541,8 +546,11 @@ export class PerformanceManager {
 
         if (this._ssaoPass) {
             this._ssaoPass.enabled = pp.ssao;
-            if (pp.ssao) {
-                this._ssaoPass.kernelRadius = cfg.ssaoKernelRadius;
+            if (pp.ssao && typeof this._ssaoPass.updateGtaoMaterial === 'function') {
+                this._ssaoPass.updateGtaoMaterial({
+                    radius: cfg.gtaoRadius,
+                    samples: cfg.gtaoSamples,
+                });
             }
         }
 
