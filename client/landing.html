@@ -1071,7 +1071,7 @@ planetTransition.register('flora', {
     },
 });
 
-// 6. Atmospheric particles
+// 7. Atmospheric particles
 planetTransition.register('particles', {
     dispose: () => atmosphericParticles.dispose(),
     create: (planetData) => {
@@ -1085,7 +1085,7 @@ planetTransition.register('particles', {
     },
 });
 
-// 7. NPC manager
+// 8. NPC manager
 planetTransition.register('npcs', {
     dispose: () => npcManager.dispose(),
     create: (planetData) => {
@@ -1097,7 +1097,7 @@ planetTransition.register('npcs', {
     },
 });
 
-// 8. Creature system
+// 9. Creature system
 planetTransition.register('creatures', {
     dispose: () => { if (creatureSystem) creatureSystem.dispose(); },
     create: (planetData) => {
@@ -1116,7 +1116,7 @@ planetTransition.register('creatures', {
     },
 });
 
-// 9. Scene environment — fog, sky dome, lighting, post-processing
+// 10. Scene environment — fog, sky dome, lighting, post-processing
 planetTransition.register('sceneEnvironment', {
     updateColors: (colors, planetData) => {
         // Scene fog
