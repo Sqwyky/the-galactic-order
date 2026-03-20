@@ -148,10 +148,14 @@ export class AlienFloraSystem {
                     uTime: { value: 0.0 },
                     uWindStrength: { value: windStrength },
                     uOpacity: { value: colors.opacity },
+                    uWindField: { value: null },
+                    uWindFieldSize: { value: 256.0 },
                 },
                 vertexShader: /* glsl */ `
                     uniform float uTime;
                     uniform float uWindStrength;
+                    uniform sampler2D uWindField;
+                    uniform float uWindFieldSize;
 
                     attribute vec3 color;
 
@@ -161,6 +165,12 @@ export class AlienFloraSystem {
                     varying vec3 vVertexColor;
                     varying float vHeightFactor;
 
+                    vec2 sampleWind(vec2 worldXZ) {
+                        vec2 uv = worldXZ / uWindFieldSize;
+                        vec4 wind = texture2D(uWindField, uv);
+                        return wind.rg;
+                    }
+
                     void main() {
                         vec3 pos = position;
 
@@ -169,19 +179,16 @@ export class AlienFloraSystem {
                         heightFactor = heightFactor * heightFactor;
                         vHeightFactor = heightFactor;
 
-                        // Multi-frequency wind with instance-based phase
+                        // Sample spatially-coherent wind from WindField texture
                         vec4 worldPos4 = instanceMatrix * vec4(pos, 1.0);
+                        vec2 wind = sampleWind(worldPos4.xz);
+
+                        // Per-plant micro-variation so plants don't sway identically
                         float phase = worldPos4.x * 0.1 + worldPos4.z * 0.13;
+                        float microVar = sin(uTime * 1.2 + phase) * 0.03;
 
-                        float wind1 = sin(uTime * 1.2 + phase) * 0.7;
-                        float wind2 = sin(uTime * 2.5 + phase * 1.5) * 0.3;
-                        float gust = sin(uTime * 0.4 + phase * 0.3);
-                        gust *= gust;
-
-                        float windOffset = (wind1 + wind2) * uWindStrength * heightFactor * (0.6 + gust * 0.4);
-
-                        pos.x += windOffset;
-                        pos.z += windOffset * 0.5;
+                        pos.x += (wind.x + microVar) * heightFactor * 2.5;
+                        pos.z += (wind.y + microVar * 0.5) * heightFactor * 2.5;
 
                         // Apply instance transform
                         vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(pos, 1.0);
@@ -271,6 +278,19 @@ export class AlienFloraSystem {
 
         this.processedChunks = new Set();
         this.chunkMeshes = new Map();
+    }
+
+    /**
+     * Connect the WindField texture so flora samples spatially-coherent gusts.
+     * @param {import('../rendering/WindField.js').WindField} windField
+     */
+    setWindField(windField) {
+        if (windField && windField.texture) {
+            for (const ft of this.floraTypes) {
+                ft.material.uniforms.uWindField.value = windField.texture;
+                ft.material.uniforms.uWindFieldSize.value = windField.worldSize;
+            }
+        }
     }
 
     update(terrainChunks, cameraPosition, time) {

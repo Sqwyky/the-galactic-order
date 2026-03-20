@@ -103,14 +103,24 @@ function createGrassMaterial(baseColor, tipColor, fogColor, fogDensity) {
             uWindStrength: { value: GRASS_CONFIG.windStrength },
             uFogColor: { value: fogColor || new THREE.Color(0x88aacc) },
             uFogDensity: { value: fogDensity || 0.0025 },
+            uWindField: { value: null },
+            uWindFieldSize: { value: 256.0 },
         },
         vertexShader: /* glsl */ `
             uniform float uTime;
             uniform float uWindSpeed;
             uniform float uWindStrength;
+            uniform sampler2D uWindField;
+            uniform float uWindFieldSize;
 
             varying vec2 vUv;
             varying float vFogDepth;
+
+            vec2 sampleWind(vec2 worldXZ) {
+                vec2 uv = worldXZ / uWindFieldSize;
+                vec4 wind = texture2D(uWindField, uv);
+                return wind.rg;
+            }
 
             void main() {
                 vUv = uv;
@@ -120,12 +130,16 @@ function createGrassMaterial(baseColor, tipColor, fogColor, fogDensity) {
 
                 // Wind sway — only affects upper part of blade (uv.y > 0)
                 float swayAmount = uv.y * uv.y; // Quadratic — tip sways most
-                float windPhase = worldPos.x * 0.3 + worldPos.z * 0.2 + uTime * uWindSpeed;
-                float windSway = sin(windPhase) * uWindStrength * swayAmount;
-                float windSway2 = sin(windPhase * 0.7 + 1.3) * uWindStrength * 0.5 * swayAmount;
 
-                worldPos.x += windSway;
-                worldPos.z += windSway2;
+                // Sample spatially-coherent wind from WindField texture
+                vec2 wind = sampleWind(worldPos.xz);
+
+                // Add small per-blade variation so blades don't move in perfect unison
+                float phase = worldPos.x * 0.3 + worldPos.z * 0.2 + uTime * uWindSpeed;
+                float microSway = sin(phase) * 0.02;
+
+                worldPos.x += (wind.x + microSway) * swayAmount * 3.0;
+                worldPos.z += (wind.y + microSway * 0.7) * swayAmount * 3.0;
 
                 // Fog depth
                 vec4 mvPosition = viewMatrix * worldPos;
@@ -206,6 +220,17 @@ export class GrassSystem {
 
         // Dummy matrix for instance setup
         this._dummy = new THREE.Object3D();
+    }
+
+    /**
+     * Connect the WindField texture so grass samples spatially-coherent gusts.
+     * @param {import('../rendering/WindField.js').WindField} windField
+     */
+    setWindField(windField) {
+        if (windField && windField.texture) {
+            this.material.uniforms.uWindField.value = windField.texture;
+            this.material.uniforms.uWindFieldSize.value = windField.worldSize;
+        }
     }
 
     /**

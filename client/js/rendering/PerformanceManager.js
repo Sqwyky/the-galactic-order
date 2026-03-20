@@ -502,6 +502,7 @@ export class PerformanceManager {
         this._autoExposure = passes.autoExposure || null;
         this._volumetricClouds = passes.volumetricClouds || null;
         this._atmospherePass = passes.atmospherePass || null;
+        this._skyDome = passes.skyDome || null;
         this._syncPasses();
     }
 
@@ -585,10 +586,12 @@ export class PerformanceManager {
 
         if (this._volumetricClouds) {
             // Volumetric clouds: enabled on ULTRA/HIGH/MEDIUM, disabled on LOW/POTATO
-            if (this.currentTier <= QUALITY_TIERS.MEDIUM) {
-                this._volumetricClouds.enabled = true;
-            } else {
-                this._volumetricClouds.enabled = false;
+            const volCloudsOn = this.currentTier <= QUALITY_TIERS.MEDIUM;
+            this._volumetricClouds.enabled = volCloudsOn;
+
+            // Toggle SkyDome 2D clouds inversely — avoid double cloud rendering
+            if (this._skyDome) {
+                this._skyDome.setCloudsEnabled(!volCloudsOn);
             }
         }
 

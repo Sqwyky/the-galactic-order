@@ -37,6 +37,7 @@ export class SkyDome {
         this.sunColor = options.sunColor || new THREE.Color(0xffeedd);
 
         this.mesh = null;
+        this._cloudsEnabled = true;
         this._build();
     }
 
@@ -52,6 +53,7 @@ export class SkyDome {
                 uSunDirection: { value: this.sunDirection },
                 uSunColor: { value: this.sunColor },
                 uTime: { value: 0.0 },
+                uCloudsEnabled: { value: 1.0 },
             },
             vertexShader: /* glsl */ `
                 varying vec3 vWorldPosition;
@@ -71,6 +73,7 @@ export class SkyDome {
                 uniform vec3 uSunDirection;
                 uniform vec3 uSunColor;
                 uniform float uTime;
+                uniform float uCloudsEnabled;
 
                 varying vec3 vWorldPosition;
                 varying vec3 vNormal;
@@ -155,7 +158,8 @@ export class SkyDome {
                     }
 
                     // ---- Procedural Clouds (enhanced) ----
-                    if (h > 0.02) {
+                    // Disabled when VolumetricCloudPass handles clouds (ULTRA/HIGH/MEDIUM)
+                    if (h > 0.02 && uCloudsEnabled > 0.5) {
                         vec2 cloudUV = dir.xz / (h + 0.1) * 0.8;
                         cloudUV += uTime * vec2(0.008, 0.003);
 
@@ -233,6 +237,18 @@ export class SkyDome {
         this.mesh = new THREE.Mesh(geo, mat);
         this.mesh.renderOrder = -1000;
         this.material = mat;
+    }
+
+    /**
+     * Disable/enable the 2D procedural clouds in the SkyDome shader.
+     * When VolumetricCloudPass is active, disable these to avoid double-rendering.
+     * @param {boolean} enabled
+     */
+    setCloudsEnabled(enabled) {
+        this._cloudsEnabled = enabled;
+        if (this.material && this.material.uniforms.uCloudsEnabled) {
+            this.material.uniforms.uCloudsEnabled.value = enabled ? 1.0 : 0.0;
+        }
     }
 
     addToScene(scene) {

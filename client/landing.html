@@ -284,6 +284,7 @@ import { SSRPass } from './js/rendering/SSRPass.js';
 import { AutoExposurePass } from './js/rendering/AutoExposurePass.js';
 import { VolumetricCloudPass } from './js/rendering/VolumetricClouds.js';
 import { WindField } from './js/rendering/WindField.js';
+import { eventBus } from './js/core/EventBus.js';
 
 // ============================================================
 // URL PARAMS — planet identity
@@ -618,8 +619,11 @@ try {
         windSpeed: planetMood.atmosphere.windStrength * 40 || 8.0,
     });
     composer.addPass(volumetricClouds);
+    // Disable SkyDome 2D clouds — volumetric pass handles clouds now
+    skyDome.setCloudsEnabled(false);
 } catch (e) {
     console.warn('[TGO] Volumetric clouds disabled:', e.message);
+    // SkyDome 2D clouds remain as fallback
 }
 
 // 2026: Screen-Space Reflections — reflective ocean and wet surfaces
@@ -743,6 +747,10 @@ let windField = new WindField({
     scrollSpeed: 5.0,
 });
 
+// Connect WindField to vegetation — spatially coherent gust waves across landscape
+grassSystem.setWindField(windField);
+alienFlora.setWindField(windField);
+
 // Ground fill plane — prevents seeing sky color below terrain edges
 // A huge flat plane at y=-1 colored to blend with distant terrain/fog
 const groundFillGeo = new THREE.PlaneGeometry(10000, 10000);
@@ -825,6 +833,7 @@ perfManager.applyToNewPasses({
     autoExposure: autoExposure,
     volumetricClouds: volumetricClouds,
     atmospherePass: atmospherePass,
+    skyDome: skyDome,
 });
 
 // Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
@@ -1061,6 +1070,12 @@ function transitionToPlanet(newRule, newSeed) {
         fogDensity: moodFogDensity,
         windStrength: planetMood.atmosphere.windStrength,
     });
+
+    // Reconnect WindField to new vegetation systems
+    if (windField) {
+        grassSystem.setWindField(windField);
+        alienFlora.setWindField(windField);
+    }
 
     // ---- Recreate atmospheric particles ----
     atmosphericParticles = new AtmosphericParticles(scene, {
