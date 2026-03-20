@@ -940,233 +940,290 @@ const hyperspaceSystem = new HyperspaceSystem(scene, camera);
 const shipHUD = new ShipHUD();
 
 // ============================================================
-// SEAMLESS PLANET TRANSITION — no loading screen, no page reload
+// SEAMLESS PLANET TRANSITION — registry-based framework
 // ============================================================
-// When the player jumps to a new planet via hyperspace, this function
-// disposes the old world and recreates everything with new parameters.
-// The flash overlay hides the transition; descent animation plays on arrival.
+// When the player jumps to a new planet via hyperspace, the
+// PlanetTransition framework orchestrates dispose → recompute → create
+// across all registered systems in deterministic order.
 //
 // Flow: FLIGHT → charge → flash → [dispose/recreate] → DESCENT → SURFACE
 
-hyperspaceSystem.onJump = (newRule, newSeed) => transitionToPlanet(newRule, newSeed);
+const planetTransition = new PlanetTransition(scene, camera, {
+    hashSeed,
+    classifyRule,
+    generatePlanetName,
+    derivePlanetMood,
+    derivePlanetFrequency,
+    frequencyToNote,
+});
 
-function transitionToPlanet(newRule, newSeed) {
-    // ---- Phase lock: prevent game loop from updating stale systems ----
-    currentPhase = PHASE.DESCENT;
+// ---- Register systems in the order they should be CREATED ----
+// (Dispose runs in reverse order automatically)
 
-    // ---- Disable all active systems ----
-    walker.disable();
-    miningSystem.disable();
-    flightController.disable();
-    weaponSystem.disable();
-    scannerSystem.disable();
-    hyperspaceSystem.disable();
-    shipHUD.hide();
-    document.getElementById('crosshair').classList.remove('visible');
-    document.getElementById('controls-hint').classList.remove('visible');
+// 1. Active systems — disable input handlers and HUD before any disposal
+planetTransition.register('activeSystems', {
+    dispose: () => {
+        currentPhase = PHASE.DESCENT;
+        walker.disable();
+        miningSystem.disable();
+        flightController.disable();
+        weaponSystem.disable();
+        scannerSystem.disable();
+        hyperspaceSystem.disable();
+        shipHUD.hide();
+        document.getElementById('crosshair').classList.remove('visible');
+        document.getElementById('controls-hint').classList.remove('visible');
+    },
+});
 
-    // ---- Dispose planet-specific systems (geometry, materials, meshes) ----
-    terrainManager.dispose();
-    grassSystem.dispose();
-    rockScatter.dispose();
-    alienFlora.dispose();
-    atmosphericParticles.dispose();
-    npcManager.dispose();
-    if (creatureSystem) creatureSystem.dispose();
+// 2. Planet identity — updates outer-scope variables, URL, and color objects
+//    Must run before terrain/vegetation so they pick up new fogColor, sunColor, etc.
+planetTransition.register('planetIdentity', {
+    create: (planetData) => {
+        planetRule = planetData.rule;
+        planetSeed = planetData.seed;
+        planetName = planetData.name;
+        classification = planetData.classification;
+        planetMood = planetData.mood;
+        planetFreq = planetData.freq;
+        planetNote = planetData.note;
 
-    // ---- Update planet identity ----
-    planetRule = newRule;
-    planetSeed = newSeed;
-    planetName = generatePlanetName(hashSeed(planetSeed, 'planet', 0));
+        // Update URL so refresh works (no page reload)
+        history.replaceState(null, '', `landing.html?rule=${planetData.rule}&seed=${planetData.seed}`);
 
-    // Update URL so refresh works (no page reload)
-    history.replaceState(null, '', `landing.html?rule=${newRule}&seed=${newSeed}`);
+        // Recalculate colors (mutates existing THREE.Color objects in-place)
+        skyTopColor.set(...planetData.mood.sky.topColor);
+        skyBottomColor.set(...planetData.mood.sky.bottomColor);
+        fogColor.set(...planetData.mood.sky.fogColor);
+        sunColor.set(...planetData.mood.sky.sunColor);
+        fc = planetData.mood.sky.fogColor;
+        atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
+        moodFogDensity = planetData.mood.atmosphere.fogDensity;
+    },
+});
 
-    // ---- Recalculate planet characteristics from CA rule + seed ----
-    classification = classifyRule(planetRule);
-    planetMood = derivePlanetMood(planetRule, planetSeed);
-    planetFreq = derivePlanetFrequency(planetRule, planetSeed);
-    planetNote = frequencyToNote(planetFreq.frequency);
+// 3. Terrain — dispose old geometry, create new world from CA rule + seed
+planetTransition.register('terrain', {
+    dispose: () => terrainManager.dispose(),
+    create: (planetData) => {
+        terrainManager = new TerrainManager(scene, {
+            rule: planetData.rule,
+            seed: planetData.seed,
+            moistureRule: (planetData.rule + 73) & 0xFF,
+        });
+        const newSunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
+        terrainManager.createWater(fogColor, newSunDir);
 
-    // ---- Recalculate colors ----
-    skyTopColor.set(...planetMood.sky.topColor);
-    skyBottomColor.set(...planetMood.sky.bottomColor);
-    fogColor.set(...planetMood.sky.fogColor);
-    sunColor.set(...planetMood.sky.sunColor);
-    fc = planetMood.sky.fogColor;
-    atmosTint = `rgba(${Math.round(fc[0]*255)},${Math.round(fc[1]*255)},${Math.round(fc[2]*255)},`;
-    moodFogDensity = planetMood.atmosphere.fogDensity;
+        // Update triplanar material for new planet colors
+        if (triplanarMaterial && triplanarMaterial.uniforms) {
+            triplanarMaterial.uniforms.uFogColor.value.copy(fogColor);
+            triplanarMaterial.uniforms.uFogDensity.value = moodFogDensity;
+            triplanarMaterial.uniforms.uSunColor.value.copy(sunColor);
+            triplanarMaterial.uniforms.uSkyColor.value.copy(skyTopColor);
+        }
+        terrainManager.setTriplanarMaterial(triplanarMaterial);
+        return terrainManager;
+    },
+});
 
-    // ---- Update scene fog ----
-    scene.fog.color.copy(fogColor);
-    scene.fog.density = moodFogDensity;
+// 3. Grass system
+planetTransition.register('grass', {
+    dispose: () => grassSystem.dispose(),
+    create: (planetData) => {
+        grassSystem = new GrassSystem(scene, {
+            baseColor: new THREE.Color(0x1a5e12),
+            tipColor: new THREE.Color(0x7ec850),
+            fogColor: fogColor,
+            fogDensity: moodFogDensity,
+        });
+        if (windField) grassSystem.setWindField(windField);
+        return grassSystem;
+    },
+});
 
-    // ---- Update sky dome ----
-    skyDome.material.uniforms.uTopColor.value.copy(skyTopColor);
-    skyDome.material.uniforms.uMidColor.value.copy(skyBottomColor);
-    skyDome.material.uniforms.uBottomColor.value.copy(fogColor);
-    skyDome.material.uniforms.uFogColor.value.copy(fogColor);
-    skyDome.material.uniforms.uSunColor.value.copy(sunColor);
+// 4. Rock scatter
+planetTransition.register('rocks', {
+    dispose: () => rockScatter.dispose(),
+    create: (planetData) => {
+        rockScatter = new RockScatter(scene, {
+            planetRule: planetData.rule,
+            rockSeed: hashSeed(planetData.seed, 'rock'),
+            rockColor: new THREE.Color(0x8a7d6b),
+            fogColor: fogColor,
+        });
+        return rockScatter;
+    },
+});
 
-    // ---- Update lighting ----
-    sunLight.color.copy(sunColor);
-    ambientLight.color.copy(skyBottomColor);
-    ambientLight.intensity = planetMood.atmosphere.ambientLight;
-    hemiLight.color.copy(skyTopColor);
-    groundFillMat.color.copy(fogColor);
+// 5. Alien flora
+planetTransition.register('flora', {
+    dispose: () => alienFlora.dispose(),
+    create: (planetData) => {
+        alienFlora = new AlienFloraSystem(scene, {
+            planetRule: planetData.rule,
+            floraSeed: hashSeed(planetData.seed, 'flora'),
+            fogColor: fogColor,
+            fogDensity: moodFogDensity,
+            windStrength: planetData.mood.atmosphere.windStrength,
+        });
+        if (windField) alienFlora.setWindField(windField);
+        return alienFlora;
+    },
+});
 
-    // ---- Update bloom strength for new planet mood ----
-    perfManager.setBloomBaseStrength(planetMood.atmosphere.bloomStrength);
+// 6. Atmospheric particles
+planetTransition.register('particles', {
+    dispose: () => atmosphericParticles.dispose(),
+    create: (planetData) => {
+        atmosphericParticles = new AtmosphericParticles(scene, {
+            color: new THREE.Color(0xddcc99),
+            fogColor: fogColor,
+            fogDensity: moodFogDensity,
+            count: planetData.mood.atmosphere.particleCount,
+        });
+        return atmosphericParticles;
+    },
+});
 
-    // ---- Update ray-marched atmosphere for new planet ----
-    if (atmospherePass) atmospherePass.setAtmosphere({
-        skyColor: skyTopColor,
-        fogColor: fogColor,
-        sunColor: sunColor,
-        fogDensity: moodFogDensity,
-        scatterStrength: planetMood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
-    });
+// 7. NPC manager
+planetTransition.register('npcs', {
+    dispose: () => npcManager.dispose(),
+    create: (planetData) => {
+        npcManager = new NPCManager(scene, {
+            seed: planetData.seed,
+            rule: planetData.rule,
+        }, (x, z) => terrainManager.getHeightAt(x, z));
+        return npcManager;
+    },
+});
 
-    // ---- Recreate terrain (new CA rule + seed = new world) ----
-    terrainManager = new TerrainManager(scene, {
-        rule: planetRule,
-        seed: planetSeed,
-        moistureRule: (planetRule + 73) & 0xFF,
-    });
-    const newSunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
-    terrainManager.createWater(fogColor, newSunDir);
+// 8. Creature system
+planetTransition.register('creatures', {
+    dispose: () => { if (creatureSystem) creatureSystem.dispose(); },
+    create: (planetData) => {
+        try {
+            creatureSystem = new CreatureSystem(scene, {
+                planetRule: planetData.rule,
+                planetSeed: planetData.seed,
+                getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
+                getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+            });
+        } catch (e) {
+            console.warn('[TGO] Creature system recreation failed:', e.message);
+            creatureSystem = null;
+        }
+        return creatureSystem;
+    },
+});
 
-    // 2026: Update triplanar material for new planet colors
-    if (triplanarMaterial && triplanarMaterial.uniforms) {
-        triplanarMaterial.uniforms.uFogColor.value.copy(fogColor);
-        triplanarMaterial.uniforms.uFogDensity.value = moodFogDensity;
-        triplanarMaterial.uniforms.uSunColor.value.copy(sunColor);
-        triplanarMaterial.uniforms.uSkyColor.value.copy(skyTopColor);
-    }
-    terrainManager.setTriplanarMaterial(triplanarMaterial);
+// 9. Scene environment — fog, sky dome, lighting, post-processing
+planetTransition.register('sceneEnvironment', {
+    updateColors: (colors, planetData) => {
+        // Scene fog
+        scene.fog.color.copy(fogColor);
+        scene.fog.density = moodFogDensity;
 
-    // 2026: Update volumetric clouds for new planet
-    if (volumetricClouds) {
-        volumetricClouds.setAtmosphere({
+        // Sky dome
+        skyDome.material.uniforms.uTopColor.value.copy(skyTopColor);
+        skyDome.material.uniforms.uMidColor.value.copy(skyBottomColor);
+        skyDome.material.uniforms.uBottomColor.value.copy(fogColor);
+        skyDome.material.uniforms.uFogColor.value.copy(fogColor);
+        skyDome.material.uniforms.uSunColor.value.copy(sunColor);
+
+        // Lighting
+        sunLight.color.copy(sunColor);
+        ambientLight.color.copy(skyBottomColor);
+        ambientLight.intensity = planetData.mood.atmosphere.ambientLight;
+        hemiLight.color.copy(skyTopColor);
+        groundFillMat.color.copy(fogColor);
+
+        // Bloom strength
+        perfManager.setBloomBaseStrength(planetData.mood.atmosphere.bloomStrength);
+
+        // Ray-marched atmosphere
+        if (atmospherePass) atmospherePass.setAtmosphere({
             skyColor: skyTopColor,
+            fogColor: fogColor,
             sunColor: sunColor,
-            sunDirection: newSunDir,
-            coverage: planetMood.atmosphere.fogDensity > 0.003 ? 0.55 : 0.35,
+            fogDensity: moodFogDensity,
+            scatterStrength: planetData.mood.atmosphere.bloomStrength > 0.4 ? 1.2 : 0.8,
         });
-    }
 
-    // 2026: Update SSR sky color for new planet
-    if (ssrPass && ssrPass._material) {
-        ssrPass._material.uniforms.uSkyColor.value.copy(skyTopColor);
-        ssrPass._material.uniforms.uSunColor.value.copy(sunColor);
-    }
+        // Volumetric clouds
+        if (volumetricClouds) {
+            const newSunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
+            volumetricClouds.setAtmosphere({
+                skyColor: skyTopColor,
+                sunColor: sunColor,
+                sunDirection: newSunDir,
+                coverage: planetData.mood.atmosphere.fogDensity > 0.003 ? 0.55 : 0.35,
+            });
+        }
 
-    // 2026: Update wind field for new planet atmosphere
-    if (windField) {
-        windField.baseStrength = planetMood.atmosphere.windStrength || 0.15;
-    }
+        // SSR
+        if (ssrPass && ssrPass._material) {
+            ssrPass._material.uniforms.uSkyColor.value.copy(skyTopColor);
+            ssrPass._material.uniforms.uSunColor.value.copy(sunColor);
+        }
 
-    // ---- Recreate vegetation + environment ----
-    grassSystem = new GrassSystem(scene, {
-        baseColor: new THREE.Color(0x1a5e12),
-        tipColor: new THREE.Color(0x7ec850),
-        fogColor: fogColor,
-        fogDensity: moodFogDensity,
-    });
+        // Wind field
+        if (windField) {
+            windField.baseStrength = planetData.mood.atmosphere.windStrength || 0.15;
+        }
+    },
+});
 
-    rockScatter = new RockScatter(scene, {
-        planetRule: planetRule,
-        rockSeed: hashSeed(planetSeed, 'rock'),
-        rockColor: new THREE.Color(0x8a7d6b),
-        fogColor: fogColor,
-    });
+// 11. UI and state reset — tablet, encounter state, descent
+planetTransition.register('uiAndState', {
+    create: (planetData) => {
+        // Reset encounter state
+        encounterState = 'waiting';
+        beingDialogueIndex = 0;
 
-    alienFlora = new AlienFloraSystem(scene, {
-        planetRule: planetRule,
-        floraSeed: hashSeed(planetSeed, 'flora'),
-        fogColor: fogColor,
-        fogDensity: moodFogDensity,
-        windStrength: planetMood.atmosphere.windStrength,
-    });
-
-    // Reconnect WindField to new vegetation systems
-    if (windField) {
-        grassSystem.setWindField(windField);
-        alienFlora.setWindField(windField);
-    }
-
-    // ---- Recreate atmospheric particles ----
-    atmosphericParticles = new AtmosphericParticles(scene, {
-        color: new THREE.Color(0xddcc99),
-        fogColor: fogColor,
-        fogDensity: moodFogDensity,
-        count: planetMood.atmosphere.particleCount,
-    });
-
-    // ---- Recreate NPCs ----
-    npcManager = new NPCManager(scene, {
-        seed: planetSeed,
-        rule: planetRule,
-    }, (x, z) => terrainManager.getHeightAt(x, z));
-
-    // ---- Recreate creature system ----
-    try {
-        creatureSystem = new CreatureSystem(scene, {
-            planetRule: planetRule,
-            planetSeed: planetSeed,
-            getHeightAt: (x, z) => terrainManager.getHeightAt(x, z),
-            getBiomeAt: (x, z) => terrainManager.getBiomeAt ? terrainManager.getBiomeAt(x, z) : 5,
+        // Update tablet with new planet data
+        tablet.setPlanetData({
+            name: planetData.name,
+            rule: planetData.rule,
+            ruleClass: planetData.classification.class,
+            ruleLabel: planetData.classification.label,
+            archetype: planetData.classification.label,
+            atmosphere: planetData.mood.moodName.charAt(0).toUpperCase() + planetData.mood.moodName.slice(1),
+            hazard: planetData.mood.band === 'gamma' ? 'Extreme' : planetData.mood.band === 'beta' ? 'Moderate' : 'Low',
+            frequency: `${planetData.freq.frequency.toFixed(2)}Hz`,
+            musicalNote: planetData.note.display,
+            brainwaveBand: planetData.mood.bandLabel,
+            mood: planetData.mood.moodName,
+            schumannResonant: planetData.mood.isSchumannResonant,
         });
-    } catch (e) {
-        console.warn('[TGO] Creature system recreation failed:', e.message);
-        creatureSystem = null;
-    }
+        tablet.addDiscovery(`Warped to ${planetData.name} (Rule ${planetData.rule}).`, 'discovery');
 
-    // ---- Reset encounter state ----
-    encounterState = 'waiting';
-    beingDialogueIndex = 0;
+        // Reset descent state machine
+        descentProgress = 0;
+        descentLanded = false;
+        shipGrounded = false;
 
-    // ---- Update tablet with new planet data ----
-    tablet.setPlanetData({
-        name: planetName,
-        rule: planetRule,
-        ruleClass: classification.class,
-        ruleLabel: classification.label,
-        archetype: classification.label,
-        atmosphere: planetMood.moodName.charAt(0).toUpperCase() + planetMood.moodName.slice(1),
-        hazard: planetMood.band === 'gamma' ? 'Extreme' : planetMood.band === 'beta' ? 'Moderate' : 'Low',
-        frequency: `${planetFreq.frequency.toFixed(2)}Hz`,
-        musicalNote: planetNote.display,
-        brainwaveBand: planetMood.bandLabel,
-        mood: planetMood.moodName,
-        schumannResonant: planetMood.isSchumannResonant,
-    });
-    tablet.addDiscovery(`Warped to ${planetName} (Rule ${planetRule}).`, 'discovery');
+        // Hide ship during descent (repositioned on landing)
+        shipModel.group.visible = false;
+        shipModel.setLandingGear(true);
 
-    // ---- Reset descent state machine ----
-    descentProgress = 0;
-    descentLanded = false;
-    shipGrounded = false;
+        // Camera to descent start position
+        camera.position.set(0, descentStartHeight, 0);
+        camera.lookAt(0, 0, 0);
 
-    // ---- Hide ship during descent (repositioned on landing) ----
-    shipModel.group.visible = false;
-    shipModel.setLandingGear(true);
+        // Fade out flash → descent begins on next frame
+        setTimeout(() => {
+            hyperspaceSystem.flashOverlay.style.opacity = '0';
+            hyperspaceSystem.resetJumpState();
+        }, 300);
 
-    // ---- Camera to descent start position ----
-    camera.position.set(0, descentStartHeight, 0);
-    camera.lookAt(0, 0, 0);
+        console.log(
+            `[TGO] ★ Warped to ${planetData.name} ` +
+            `(Rule ${planetData.rule}, Seed ${planetData.seed}, ${planetData.mood.bandLabel} ${planetData.mood.moodName})`
+        );
+    },
+});
 
-    // ---- Fade out flash → descent begins on next frame ----
-    setTimeout(() => {
-        hyperspaceSystem.flashOverlay.style.opacity = '0';
-        hyperspaceSystem.resetJumpState();
-    }, 300);
-
-    console.log(
-        `[TGO] ★ Warped to ${planetName} ` +
-        `(Rule ${planetRule}, Seed ${planetSeed}, ${planetMood.bandLabel} ${planetMood.moodName})`
-    );
-}
+hyperspaceSystem.onJump = (newRule, newSeed) => planetTransition.execute(newRule, newSeed);
 
 // World position helper (for when camera is child of ship)
 const _shipWorldPos = new THREE.Vector3();
