@@ -213,6 +213,12 @@ export class PerformanceManager {
         this._filmGrainPass  = null;
         this._colorGradePass = null;
 
+        // ---- New rendering systems (2026 pipeline) ----
+        this._ssrPass        = null;   // Screen-space reflections
+        this._autoExposure   = null;   // Eye adaptation
+        this._volumetricClouds = null; // 3D volumetric clouds
+        this._atmospherePass = null;   // Ray-marched atmosphere
+
         // ---- Device capabilities (populated by _detectHardware) ----
         this.deviceInfo = {
             maxTextureSize:     0,
@@ -482,6 +488,24 @@ export class PerformanceManager {
     }
 
     /**
+     * Register the new 2026 rendering passes for quality management.
+     * Call after the composer pipeline is built with the new passes.
+     *
+     * @param {Object} passes
+     * @param {SSRPass} [passes.ssrPass]
+     * @param {AutoExposurePass} [passes.autoExposure]
+     * @param {VolumetricCloudPass} [passes.volumetricClouds]
+     * @param {RayMarchedAtmospherePass} [passes.atmospherePass]
+     */
+    applyToNewPasses(passes = {}) {
+        this._ssrPass = passes.ssrPass || null;
+        this._autoExposure = passes.autoExposure || null;
+        this._volumetricClouds = passes.volumetricClouds || null;
+        this._atmospherePass = passes.atmospherePass || null;
+        this._syncPasses();
+    }
+
+    /**
      * Set the mood-driven bloom base strength. Called once when the planet
      * mood is computed (e.g. planetMood.atmosphere.bloomStrength).
      *
@@ -537,6 +561,45 @@ export class PerformanceManager {
             this._colorGradePass.enabled = pp.colorGrade;
             if (this._colorGradePass.uniforms && this._colorGradePass.uniforms.uSaturation) {
                 this._colorGradePass.uniforms.uSaturation.value = this.settings.saturationBoost;
+            }
+        }
+
+        // ---- New 2026 pipeline passes ----
+        const tierName = TIER_NAMES[this.currentTier];
+
+        if (this._ssrPass) {
+            // SSR: enabled on ULTRA/HIGH, disabled on MEDIUM and below
+            if (this.currentTier <= QUALITY_TIERS.HIGH) {
+                this._ssrPass.enabled = true;
+                this._ssrPass.setQuality(tierName.toLowerCase());
+            } else {
+                this._ssrPass.enabled = false;
+            }
+        }
+
+        if (this._autoExposure) {
+            // Auto-exposure: always enabled (very cheap), but speed varies
+            this._autoExposure.enabled = true;
+            this._autoExposure.adaptationSpeed = this.currentTier <= QUALITY_TIERS.HIGH ? 2.0 : 3.0;
+        }
+
+        if (this._volumetricClouds) {
+            // Volumetric clouds: enabled on ULTRA/HIGH/MEDIUM, disabled on LOW/POTATO
+            if (this.currentTier <= QUALITY_TIERS.MEDIUM) {
+                this._volumetricClouds.enabled = true;
+            } else {
+                this._volumetricClouds.enabled = false;
+            }
+        }
+
+        if (this._atmospherePass) {
+            // Ray-marched atmosphere quality
+            if (this.currentTier <= QUALITY_TIERS.HIGH) {
+                this._atmospherePass.setQuality('high');
+            } else if (this.currentTier === QUALITY_TIERS.MEDIUM) {
+                this._atmospherePass.setQuality('medium');
+            } else {
+                this._atmospherePass.setQuality('low');
             }
         }
     }

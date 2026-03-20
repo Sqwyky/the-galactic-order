@@ -26,6 +26,7 @@
 
 import * as THREE from 'three';
 import { hashSeed, seededRandom } from '../generation/hashSeed.js';
+import { createTriplanarTerrainMaterial } from '../rendering/TriplanarTerrainMaterial.js';
 
 // ============================================================
 // CONFIGURATION
@@ -446,6 +447,10 @@ export class TerrainManager {
         this.planetData = planetData;
         this.config = { ...TERRAIN_CONFIG, ...config };
 
+        // Triplanar PBR material (shared across all chunks for best perf)
+        // Set via setTriplanarMaterial() from landing.html
+        this._triplanarMaterial = null;
+
         // Active chunks (key -> TerrainChunkMesh)
         this.chunks = new Map();
 
@@ -812,8 +817,11 @@ export class TerrainManager {
         const chunk = this.chunks.get(key);
         if (chunk) {
             if (chunk.mesh) this.scene.remove(chunk.mesh);
-            // Pool reusable material (geometry varies per chunk so dispose it)
-            if (chunk.material && this._chunkPool.length < this.config.chunkPoolSize) {
+            // Don't dispose shared triplanar material
+            if (this._triplanarMaterial && chunk.material === this._triplanarMaterial) {
+                chunk.material = null; // Prevent dispose of shared material
+            } else if (chunk.material && this._chunkPool.length < this.config.chunkPoolSize) {
+                // Pool reusable material (geometry varies per chunk so dispose it)
                 this._chunkPool.push(chunk.material);
                 chunk.material = null; // Prevent dispose
             }
@@ -1061,9 +1069,24 @@ export class TerrainManager {
     }
 
     /**
+     * Set a shared triplanar PBR material for all terrain chunks.
+     * When set, chunks use this instead of MeshStandardMaterial.
+     * @param {THREE.ShaderMaterial} material - From createTriplanarTerrainMaterial()
+     */
+    setTriplanarMaterial(material) {
+        this._triplanarMaterial = material;
+    }
+
+    /**
      * Get a pooled material or create a new one.
+     * If triplanar material is set, returns a clone of it.
      */
     _getPooledMaterial() {
+        if (this._triplanarMaterial) {
+            // Share the same material instance across all chunks
+            // (ShaderMaterial uniforms are shared — this is desired)
+            return this._triplanarMaterial;
+        }
         if (this._chunkPool.length > 0) {
             return this._chunkPool.pop();
         }
