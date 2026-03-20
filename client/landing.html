@@ -1026,7 +1026,7 @@ planetTransition.register('terrain', {
     },
 });
 
-// 3. Grass system
+// 4. Grass system
 planetTransition.register('grass', {
     dispose: () => grassSystem.dispose(),
     create: (planetData) => {
@@ -1041,7 +1041,7 @@ planetTransition.register('grass', {
     },
 });
 
-// 4. Rock scatter
+// 5. Rock scatter
 planetTransition.register('rocks', {
     dispose: () => rockScatter.dispose(),
     create: (planetData) => {
@@ -1055,7 +1055,7 @@ planetTransition.register('rocks', {
     },
 });
 
-// 5. Alien flora
+// 6. Alien flora
 planetTransition.register('flora', {
     dispose: () => alienFlora.dispose(),
     create: (planetData) => {
