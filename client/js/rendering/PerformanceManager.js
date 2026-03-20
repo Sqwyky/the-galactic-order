@@ -94,7 +94,7 @@ const TIER_SETTINGS = {
         floraMultiplier:      0.6,
         grassEnabled:         true,
         miningParticleCount:  25,
-        shadowsEnabled:       false,
+        shadowsEnabled:       true,   // CSM provides 2-cascade shadows at this tier
         shadowMapSize:        512,
         postProcessing: {
             ssao:       false,
@@ -219,6 +219,7 @@ export class PerformanceManager {
         this._colorGradePass = null;
 
         // ---- New rendering systems (2026 pipeline) ----
+        this._taaPass        = null;   // Temporal anti-aliasing
         this._ssrPass        = null;   // Screen-space reflections
         this._autoExposure   = null;   // Eye adaptation
         this._volumetricClouds = null; // 3D volumetric clouds
@@ -508,6 +509,7 @@ export class PerformanceManager {
         this._volumetricClouds = passes.volumetricClouds || null;
         this._atmospherePass = passes.atmospherePass || null;
         this._skyDome = passes.skyDome || null;
+        this._csmManager = passes.csmManager || null;
         this._syncPasses();
     }
 
@@ -612,6 +614,12 @@ export class PerformanceManager {
             } else {
                 this._atmospherePass.setQuality('low');
             }
+        }
+
+        // ---- Cascade Shadow Maps ----
+        if (this._csmManager) {
+            // ULTRA/HIGH: 3 cascades, MEDIUM: 2 cascades, LOW/POTATO: disabled
+            this._csmManager.setQuality(tierName);
         }
     }
 

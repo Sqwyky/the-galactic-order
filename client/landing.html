@@ -265,6 +265,7 @@ import { InventoryManager } from './js/ui/InventoryManager.js';
 import { MiningHUD } from './js/ui/MiningHUD.js';
 import { ELEMENTS } from './js/generation/HarmonicElements.js';
 import { PerformanceManager } from './js/rendering/PerformanceManager.js';
+import { CascadeShadowManager } from './js/rendering/CascadeShadowManager.js';
 
 // Creature system
 import { CreatureSystem } from './js/creatures/CreatureSystem.js';
@@ -543,6 +544,10 @@ sunLight.shadow.bias = -0.0005;
 sunLight.shadow.normalBias = 0.02;
 scene.add(sunLight);
 scene.add(sunLight.target);
+
+// Cascade Shadow Manager — multi-frustum shadows for quality across distances
+const csmManager = new CascadeShadowManager(scene, sunLight);
+csmManager.setSunDirection(new THREE.Vector3(-100, -80, -60).normalize());
 
 // Ambient light intensity from mood (Delta worlds are dimmer, Beta worlds brighter)
 const ambientLight = new THREE.AmbientLight(skyBottomColor, planetMood.atmosphere.ambientLight);
@@ -840,11 +845,13 @@ perfManager.applyToComposer(composer, ssaoPass, bloomPass, filmGrainPass, colorG
 
 // Wire 2026 pipeline passes to perf manager
 perfManager.applyToNewPasses({
+    taaPass: taaPass,
     ssrPass: ssrPass,
     autoExposure: autoExposure,
     volumetricClouds: volumetricClouds,
     atmospherePass: atmospherePass,
     skyDome: skyDome,
+    csmManager: csmManager,
 });
 
 // Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
@@ -1522,6 +1529,7 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    if (taaPass) taaPass.setSize(window.innerWidth, window.innerHeight);
     if (gtaoPass) gtaoPass.setSize(window.innerWidth, window.innerHeight);
     if (atmospherePass) atmospherePass.setSize(window.innerWidth, window.innerHeight);
     if (volumetricClouds) volumetricClouds.setSize(window.innerWidth, window.innerHeight);
@@ -1714,6 +1722,9 @@ function animate() {
             `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'}`;
     }
 
+    // Update cascade shadow maps (tracks camera for all phases)
+    csmManager.update(camera);
+
     // Update film grain time uniform (animated noise pattern each frame)
     filmGrainPass.uniforms.uTime.value = t;
 
@@ -1725,7 +1736,10 @@ function animate() {
     }
 
     // Render with full post-processing pipeline
+    // TAA jitter: offset camera projection before render, restore after
+    taaPass.applyJitter();
     composer.render();
+    taaPass.restoreJitter();
 
     // Performance manager — adaptive quality
     perfManager.update(dt);
@@ -1763,6 +1777,7 @@ window._debug = {
     get mining() { return miningSystem; },
     get inventory() { return inventory; },
     get perf() { return perfManager; },
+    get csm() { return csmManager; },
     get phase() { return currentPhase; },
     warpTo: transitionToPlanet,
 };
