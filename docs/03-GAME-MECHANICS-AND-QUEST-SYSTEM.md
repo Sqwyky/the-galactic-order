@@ -547,6 +547,38 @@ This means prices vary +-30% per system. Players can profit by buying low in one
 - **How is the HUD/UI rendered?** -> Part 07 (Rendering)
 - **How is quest state saved?** -> Part 08 (Database)
 
+## 14. Implementation Status
+
+> **Last updated:** March 2026
+
+### What's Built
+- **Player Movement**: `WalkingController.js` — first-person WASD movement with gravity, sprint (Shift), jump (Space), head bob
+- **Ship Flight**: `FlightController.js` — physics-based flight with thrust, banking, boost, free-look
+- **Ship Controls**: Ship boarding/exiting with E key, auto-landing
+- **Mining System**: Full mining implementation with `MiningSystem.js`, `MiningBeam.js`, `MiningTarget.js`, `ResourceCrystal.js`, `DeconstructionEffect.js`
+- **Mining HUD**: `MiningHUD.js` — beam control and resource meter display
+- **Inventory**: `InventoryManager.js` — basic item management
+- **Tablet UI**: `TabletUI.js` — multi-tab in-game tablet interface (TAB key)
+- **Ship HUD**: `ShipHUD.js` — altitude, velocity, heading, targeting reticle
+- **Scanner**: `ScannerSystem.js` — environment scanning (C key)
+- **Weapons**: `WeaponSystem.js` — laser and rocket weapons with visual effects
+- **Hyperspace**: `HyperspaceSystem.js` — warp drive mechanics
+- **Touch Controls**: `TouchControls.js` — mobile device support
+- **Dialogue System**: `DialogueSystem.js` — NPC conversation interface (terminal-style aesthetic)
+
+### What's NOT Built (Planned)
+- **Quest System**: No quest manager, no quest tracking, no quest log — Acts 1-5 are design only
+- **Crafting System**: No crafting recipes, no crafting UI
+- **XP/Leveling**: No experience points, no level progression, no tech tier unlocks
+- **Base Building**: Not implemented
+- **Economy/Trading**: No credits, no NPC trading, no dynamic pricing
+- **Discovery/Naming**: No discovery upload or naming persistence
+- **Death/Respawn**: No death mechanic or inventory drop
+- **Combat System**: Weapons exist on ship but no creature combat system
+- **Resource Types**: Mining works but the full resource hierarchy (Common/Uncommon/Rare/Exotic) is not implemented
+- **Multi-Tool Modules**: No terrain manipulator, no analysis visor upgrades
+- **Ship Types**: Only the "Voidmoth" Mk-I exists (no Explorer, Fighter, Freighter progression)
+
 ---
 
 ## Next Document: Part 04 - AI Integration (Gemini API)

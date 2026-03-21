@@ -549,6 +549,29 @@ The Terminal screen uses CSS/shader effects to look like an old computer:
 - **How puzzle state is saved/loaded** -> Part 08
 - **The Deep Terminal's procedural puzzle generator algorithm** -> Future enhancement document
 
+## 10. Implementation Status
+
+> **Last updated:** March 2026
+
+### Implementation: 0% — Not Yet Built
+
+**Nothing from this document has been implemented.** The terminal system, cipher fragments, puzzle stages, CRT renderer, rule explorer, and deep terminal are all design specifications for future development (Phase 4 in the roadmap).
+
+**No code exists for:**
+- Terminal UI or CRT screen renderer
+- Cipher Fragment items or collection
+- Any of the 4 puzzle stages (Reconstruction, Neighborhood, The Number, Verification)
+- Rule Explorer (post-crack feature)
+- Deep Terminal (procedural puzzle generator)
+- Terminal integration with the ship interior
+
+**Prerequisites before building:**
+- Quest system framework (Part 03) must be built first
+- Inventory system needs to support Cipher Fragment items
+- Ship interior scene needs a terminal screen mesh
+
+This is one of the signature gameplay mechanics described in the design docs and represents a major piece of future development work.
+
 ---
 
 ## Next Document: Part 07 - Frontend & Rendering (Three.js/WebGL)

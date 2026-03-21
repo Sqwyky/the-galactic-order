@@ -52,7 +52,7 @@ THE GALACTIC ORDER (Universe)
             |   |
             |   +-- Biome A (Sub-rule applied to terrain regions)
             |   +-- Biome B
-            |   +-- Structures (L-system flora, CA-derived formations)
+            |   +-- Structures (Superformula flora, CA-derived rock formations)
             |   +-- Creatures (Behavioral CA - simple rules -> complex behavior)
             |   +-- Resources (Distributed by rule density patterns)
             |
@@ -93,7 +93,7 @@ CLASSIFY BIOMES ──> Rule density determines climate/terrain type
 GENERATE MESH (Three.js) ──> 3D planet you can walk on
        |
        v
-POPULATE ──> Flora (L-systems), fauna (behavioral CA), resources
+POPULATE ──> Flora (Gielis superformula), fauna (behavioral CA), resources
 ```
 
 ---
@@ -272,6 +272,38 @@ The game is **free to play**. AI features use the player's own API key. Potentia
 6. **What's the shader pipeline for planet rendering?** -> Part 07
 7. **How is the API key stored securely?** -> Part 08
 8. **What do we build FIRST?** -> Part 10
+
+---
+
+## 11. Implementation Status
+
+> **Last updated:** March 2026
+
+### What's Built
+- Core CA engine with all 256 Wolfram rules (`cellularAutomata.js`)
+- FNV-1a deterministic hashing (`hashSeed.js`)
+- Heightmap generation with multi-octave smoothing (`heightmap.js`)
+- Biome classification from elevation + moisture (`biomeMap.js`)
+- Superformula-driven flora generation — replaced L-systems with Gielis superformula (`superformula.js`, `caShapeParams.js`)
+- Harmonic Resonance system — planet mood from CA-derived frequencies mapped to brainwave bands (`harmonicResonance.js`, `HarmonicElements.js`)
+- Procedural name generation (`nameGenerator.js`)
+- Universe seed chain (`UniverseManager.js`, `ResonanceOrbit.js`)
+- Planet rendering with 25+ post-processing passes
+- Ship flight, weapons, scanner, hyperspace
+- Walking controller with gravity, sprint, jump
+- Mining system with visual effects
+- NPC encounter (Mysterious Being) with dialogue UI
+- In-game tablet with planet data
+
+### What's Planned (Not Yet Built)
+- Gemini AI integration (scaffolding exists, no API calls)
+- Terminal cipher-breaking puzzle system
+- Quest system and progression
+- Crafting system
+- Multiplayer networking
+- Player accounts and save/load
+- Base building
+- Audio system
 
 ---
 

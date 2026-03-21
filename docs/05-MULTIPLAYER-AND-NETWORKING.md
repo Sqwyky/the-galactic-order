@@ -603,6 +603,36 @@ When group members are on the same planet:
 - **Database schema for discovery/saves** -> Part 08 (Database)
 - **Server deployment and DevOps** -> Part 09 (Project Structure)
 
+## 15. Implementation Status
+
+> **Last updated:** March 2026
+
+### Implementation: 0% — Single-Player Only
+
+**Current Server State:**
+The server (`server/index.js`) is a simple Node.js HTTP static file server (~70 lines). It serves the `client/` directory on port 3000. That's all it does.
+
+**What Does NOT Exist:**
+- No Express framework (just raw `http.createServer`)
+- No Socket.io or WebSocket infrastructure
+- No player registry or authentication
+- No instance system
+- No position synchronization
+- No chat system
+- No discovery sharing or persistence
+- No database connections
+- No REST API endpoints
+- No JWT authentication
+- No anti-cheat validation
+
+**What This Means:**
+- The game is entirely single-player
+- All game state is transient (lost on page reload)
+- No player accounts, no saves, no persistence
+- The multiplayer architecture described in this document is a design specification for future implementation (Phase 6 in the roadmap)
+
+All multiplayer-related content in this document represents the **planned design**, not current functionality.
+
 ---
 
 ## Next Document: Part 06 - Terminal System & Code-Breaking

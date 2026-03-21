@@ -1197,6 +1197,34 @@ RATE_LIMIT_MAX=100          # 100 requests per window
 
 ---
 
+## Implementation Status
+
+> **Last updated:** March 2026
+
+### Implementation: 0% — Not Yet Built
+
+**Nothing from this document has been implemented.** There is no database, no player accounts, no save system, and no persistence layer.
+
+**Current state:**
+- No Knex.js setup, no SQLite database, no PostgreSQL
+- No migration files
+- No player accounts or authentication
+- No save/load system — all game state is transient (lost on page reload)
+- No inventory persistence
+- No quest state storage
+- No discovery persistence
+- No API key encryption or storage
+- `server/index.js` is a simple static file server with no database connections
+
+**What this means for gameplay:**
+- Every page load starts fresh
+- No progress carries between sessions
+- Mining, inventory, position — all reset on reload
+
+This is planned for Phase 5 (Accounts & Saves) in the development roadmap.
+
+---
+
 ## Cross-References
 
 - **Part 04 (AI Integration)**: Gemini API key handling, conversation memory format

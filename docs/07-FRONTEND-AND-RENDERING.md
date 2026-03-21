@@ -451,57 +451,73 @@ Tablet tabs:
 
 ---
 
-## 8. Post-Processing
+## 8. Post-Processing & Advanced Rendering
 
-### 8.1 Effects Pipeline
+### 8.1 Effects Pipeline (Implemented)
 
-```javascript
-const composer = new EffectComposer(renderer);
+The rendering pipeline has grown far beyond the original design. The current post-processing stack includes 15+ passes managed by Three.js EffectComposer:
 
-// 1. Main render pass
-composer.addPass(new RenderPass(scene, camera));
+| Pass | File | Description | Quality Tier |
+|------|------|-------------|-------------|
+| Auto Exposure | `AutoExposurePass.js` | Dynamic exposure adjustment based on scene luminance | HIGH+ |
+| Cascade Shadows | `CascadeShadowManager.js` | Multi-cascade shadow maps for large distance ranges | MEDIUM+ |
+| Screen-Space Reflections | `SSRPass.js` | Reflections on water and metallic surfaces | HIGH+ |
+| Screen-Space GI | `SSGIPass.js` | Approximate global illumination from screen data | ULTRA |
+| Temporal Anti-Aliasing | `TAAPass.js` | Sub-pixel jitter-based anti-aliasing with history buffer | HIGH+ |
+| FXAA | `FXAAPass.js` | Fast approximate anti-aliasing (fallback for TAA) | LOW+ |
+| Depth of Field | `DOFPass.js` | Bokeh blur based on focal distance | HIGH+ |
+| Motion Blur | `MotionBlurPass.js` | Velocity-based per-pixel motion blur | HIGH+ |
+| Contact Shadows | `ContactShadowPass.js` | Fine-detail contact shadows for small objects | ULTRA |
+| Lens Flare | `LensFlarePass.js` | Star-based lens flares from bright light sources | MEDIUM+ |
+| Lens Dirt | `LensDirtPass.js` | Lens dirt/grime overlay triggered by bright sources | MEDIUM+ |
+| Volumetric Clouds | `VolumetricClouds.js` | 3D ray-marched cloud volumes | HIGH+ |
+| Bloom | Three.js UnrealBloomPass | Glow on emissive surfaces, stars, atmosphere | LOW+ |
+| Color Grading | Custom ShaderPass | Per-biome color palette adjustment | LOW+ |
+| Film Grain | Custom ShaderPass | Subtle noise for cinematic feel | MEDIUM+ |
 
-// 2. Bloom (for stars, emissive materials, atmosphere)
-const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.5,   // strength
-    0.4,   // radius
-    0.85   // threshold
-);
-composer.addPass(bloomPass);
+### 8.2 Advanced Materials & Shaders
 
-// 3. Color grading (per-rule-class palette)
-const colorPass = new ShaderPass(ColorGradingShader);
-composer.addPass(colorPass);
+| System | File | Description |
+|--------|------|-------------|
+| Triplanar Terrain | `TriplanarTerrainMaterial.js` | PBR terrain with 3-axis texture blending, parallax mapping, subsurface scattering |
+| Sky Dome | `SkyDome.js` | NMS-style procedural sky with Rayleigh/Mie scattering and FBM clouds |
+| Ocean Shader | `OceanShader.js` | Animated water with wave simulation, Fresnel, specular highlights, shore foam |
+| Atmosphere | `AtmosphereShader.js` + `RayMarchedAtmosphere.js` | Dual atmosphere system: simple Fresnel rim + volumetric ray-marched scattering |
+| Procedural Environment Map | `ProceduralEnvMap.js` | Dynamic skybox generation for reflections |
+| Shared GLSL | `shaders/CommonGLSL.js` | Shared noise functions, utilities across all shaders |
 
-// 4. Vignette (subtle darkening at edges)
-const vignettePass = new ShaderPass(VignetteShader);
-composer.addPass(vignettePass);
-```
+### 8.3 Environmental Systems
 
-### 8.2 Performance Modes
+| System | File | Description |
+|--------|------|-------------|
+| Weather | `WeatherSystem.js` | Dynamic weather with rain, snow, fog transitions |
+| Wind | `WindField.js` | Wind simulation affecting grass, flora, particles |
+| Atmospheric Particles | `AtmosphericParticles.js` | Dust, pollen, snow particles in atmosphere |
 
-```
-HIGH (default on desktop):
-  - All post-processing
-  - LOD 4 terrain at 256x256 chunks
-  - Flora render distance: 500m
-  - Shadow maps: enabled
+### 8.4 Performance Manager
 
-MEDIUM (default on laptop):
-  - Bloom only (no color grading, no vignette)
-  - LOD 3 max terrain
-  - Flora render distance: 300m
-  - Shadow maps: disabled
+`PerformanceManager.js` provides adaptive quality scaling across 5 tiers:
 
-LOW (for older hardware):
-  - No post-processing
-  - LOD 2 max terrain
-  - Flora render distance: 100m, billboards only
-  - Reduced starfield (2000 stars)
-```
+| Tier | Resolution | Post-FX | Shadows | Flora Distance |
+|------|-----------|---------|---------|----------------|
+| ULTRA | 1.0x | All passes enabled | Cascade (4 levels) | 500m |
+| HIGH | 1.0x | Most passes | Cascade (3 levels) | 400m |
+| MEDIUM | 0.85x | Core passes only | Single shadow map | 300m |
+| LOW | 0.7x | Bloom + color grade only | Disabled | 150m |
+| POTATO | 0.5x | None | Disabled | 50m |
 
-Player can switch in Settings. The game auto-detects initial quality by testing frame time on the first 60 frames.
+`ResolutionScaler.js` handles dynamic resolution scaling (0.25x to 2.0x) by adjusting the renderer pixel ratio and draw buffer size without affecting CSS layout.
+
+### 8.5 Terrain LOD (Quadtree System)
+
+The original doc described a simple chunk grid. The actual implementation uses a **Pioneer Space Sim-inspired quadtree LOD** system:
+
+- `TerrainChunk.js` (1069 lines) — hierarchical quadtree terrain node
+- `QuadtreeNode.js` — tree structure with split/merge based on camera distance
+- 5 LOD levels: Level 0 (512m chunks) down to Level 4 (32m chunks)
+- Hysteresis-based split/merge to prevent LOD popping
+- Max 250 active chunks
+- Web Worker (`TerrainWorker.js`) for async terrain generation
 
 ---
 
@@ -632,6 +648,31 @@ Audio is not the focus of MVP but the architecture supports it:
 - **Server-side rendering (none - everything is client-side)** -> Part 05
 - **Mobile/touch controls** -> Future enhancement
 - **Asset pipeline (model creation tools)** -> Part 09
+
+---
+
+## 14. Implementation Status
+
+> **Last updated:** March 2026
+
+### Implementation: ~95% — Exceeds Original Design
+
+The rendering pipeline is the most developed part of the codebase, with 25+ rendering files totaling thousands of lines. The implementation significantly exceeds the original design document, which described only basic bloom, color grading, and vignette post-processing.
+
+**Beyond the original design:**
+- 15+ post-processing passes (original doc described 3)
+- PBR triplanar terrain material with subsurface scattering
+- Full weather and wind simulation
+- Volumetric cloud rendering
+- Dynamic resolution scaling with 5 quality tiers
+- Quadtree LOD terrain (vs simple chunk grid in docs)
+- Ray-marched atmosphere
+
+**What's NOT built from this doc:**
+- Audio system (Section 12) — no audio implementation exists
+- Ship interior rendering (cockpit, terminal screen mesh)
+- Photo mode / cinematic camera
+- Mobile-specific optimizations (touch controls exist via `TouchControls.js`)
 
 ---
 

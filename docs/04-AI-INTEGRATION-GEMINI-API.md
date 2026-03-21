@@ -515,6 +515,31 @@ If a player upgrades to a paid Gemini tier, they could use Pro models for richer
 - **Multiplayer AI interactions** (can two players talk to the same Being?) -> Part 05
 - **The chat UI in the Tablet** -> Part 07
 
+## 12. Implementation Status
+
+> **Last updated:** March 2026
+
+### Implementation: ~5% (Scaffolding Only)
+
+**What Exists:**
+- **Mysterious Being NPC**: Visual representation in `NPCManager.js` — octahedron mesh with particle effects, glow animation, and hover behavior
+- **Dialogue System**: `DialogueSystem.js` — terminal-style chat UI with typing animation, supports displaying Being responses
+- **Key of Insight UI**: References in `TabletUI.js` and `DialogueSystem.js` suggest API key entry flow scaffolding
+- **Being encounter**: The NPC appears in-game and has pre-Gemini static dialogue
+
+**What's NOT Built:**
+- **No Gemini API client**: No code makes actual API calls to Google's generativelanguage endpoint
+- **No conversation memory**: No localStorage conversation tracking
+- **No context injection**: No game state is sent to any AI
+- **No quest generation**: No AI-generated quests
+- **No lore generation**: No dynamic lore creation
+- **No terminal hints**: No AI-powered hint system
+- **No safety filtering**: No input/output filtering
+- **No API key encryption**: No AES-256 storage
+- **No fallback system**: No scripted response pool for offline mode
+
+The game is fully playable without any AI integration. The Being appears visually and has basic scripted interaction, but is not connected to any language model.
+
 ---
 
 ## Next Document: Part 05 - Multiplayer & Networking

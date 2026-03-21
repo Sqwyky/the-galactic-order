@@ -213,61 +213,37 @@ The rule's Wolfram class influences the biome distribution:
 
 ---
 
-## 5. Layer 4: Flora Generation (L-Systems)
+## 5. Layer 4: Flora Generation (Superformula)
 
-### 5.1 What is an L-System?
+### 5.1 What is the Superformula?
 
-An L-system (Lindenmayer system) generates branching structures from simple string-rewriting rules. Perfect for trees, plants, coral, alien growths.
+The Gielis superformula generates complex organic and geometric 3D shapes from a small set of parameters. It's more versatile than L-systems for alien flora because it can produce shapes that range from smooth organic forms to sharp crystalline structures.
 
-```
-EXAMPLE - Simple Tree:
-  Axiom:   F
-  Rules:   F -> F[+F]F[-F]F
+The superformula in polar coordinates:
+r(θ) = (|cos(m₁θ/4)/a|^n₂ + |sin(m₂θ/4)/b|^n₃)^(-1/n₁)
 
-  Where:
-    F = draw forward
-    + = turn right 25 degrees
-    - = turn left 25 degrees
-    [ = save position (push)
-    ] = restore position (pop)
+By varying the parameters (m, n₁, n₂, n₃, a, b), we get everything from spheres to stars to spiky alien flowers.
 
-  Generation 0: F
-  Generation 1: F[+F]F[-F]F
-  Generation 2: F[+F]F[-F]F[+F[+F]F[-F]F]F[+F]F[-F]F[-F[+F]F[-F]F]F[+F]F[-F]F
-```
+### 5.2 CA-Driven Superformula Parameters
 
-Each generation adds branching. After 4-5 generations you get a realistic tree shape.
+The cellular automaton rule determines the superformula parameters via `caShapeParams.js`, so flora matches the planet's mathematical character:
 
-### 5.2 CA-Driven L-System Parameters
+- m (symmetry order) = derived from rule density (higher density → more lobes)
+- n1, n2, n3 (shape exponents) = derived from rule class and complexity
+- Scale and variant count = from biome type
 
-The cellular automaton rule determines the L-system parameters, so flora matches the planet's mathematical character:
-
-```
-FLORA PARAMETERS FROM CA:
-
-  branch_angle    = 15 + (rule_density * 50)       // 15-65 degrees
-  branch_ratio    = 0.5 + (rule_symmetry * 0.3)    // How much branches shrink
-  iterations      = 3 + floor(rule_complexity * 4)  // 3-7 branching depth
-  trunk_width     = based on biome (desert=thin, jungle=thick)
-  leaf_density    = moisture value at plant location
-  color_hue       = derived from rule number (rule % 360)
-
-Where:
-  rule_density    = average cell value across full CA grid (0.0 to 1.0)
-  rule_symmetry   = correlation between left/right halves of CA pattern
-  rule_complexity = entropy measurement of CA output
-```
+Each planet generates 5 unique flora variants using different parameter sets derived from the same CA rule. The `superformula.js` module handles the 3D mesh generation, while `AlienFlora.js` handles instanced placement with wind sway animation.
 
 ### 5.3 Flora Types Per Biome
 
-| Biome | Flora Type | L-System Character |
-|-------|-----------|-------------------|
-| Jungle | Towering trees, dense canopy | Deep iteration (6-7), wide angles, thick |
-| Desert | Cacti, sparse shrubs | Shallow iteration (2-3), narrow, spiky |
-| Alpine | Pine-like conifers | Medium iteration (4-5), narrow angle, tall |
-| Ocean Floor | Coral, kelp | Wide angles, undulating, short |
-| Crystal | Geometric growths | Perfect symmetry, sharp angles, metallic |
-| Void/Dead | Nothing or single spires | Iteration 1, bare sticks |
+| Biome | Flora Type | Superformula Character |
+|-------|-----------|------------------------|
+| Jungle | Towering trees, dense canopy | High-lobe organic forms, complex exponents, large scale |
+| Desert | Cacti, sparse shrubs | Low-lobe spiky shapes, sharp exponents, small scale |
+| Alpine | Pine-like conifers | Medium symmetry, elongated vertical forms |
+| Ocean Floor | Coral, kelp | Smooth organic shapes, rounded exponents, undulating |
+| Crystal | Geometric growths | High symmetry order, sharp geometric forms, metallic |
+| Void/Dead | Nothing or single spires | Minimal parameters, degenerate shapes |
 
 ---
 
@@ -374,6 +350,8 @@ This means creature behavior is deterministic and unique per species, but produc
 
 ### 7.3 Creature Distribution
 
+Creature generation uses `CreatureGenerator.js` for body plan creation, `CreatureSystem.js` for spawning and lifecycle management, and `CreatureAI.js` for behavioral state machines.
+
 ```
 creatures_per_biome = floor(rule_complexity * biome_moisture * 10)
 
@@ -465,7 +443,7 @@ BIOME MAP:
        |
        v
 FLORA PLACEMENT:
-  For each biome region, generate L-system parameters from rule character
+  For each biome region, generate superformula parameters from rule character via caShapeParams.js
   Place trees/plants at CA-driven positions
        |
        v
@@ -610,12 +588,38 @@ The entire procedural generation pipeline is:
 4. **Multi-scale density smoothing** converts binary grids to smooth heightmaps
 5. **Dual heightmaps** (elevation + moisture) classify biomes
 6. **Cube-sphere projection** wraps flat maps onto 3D planets
-7. **L-systems** grow flora with parameters derived from the CA rule character
+7. **Gielis superformula** generates flora with parameters derived from the CA rule character
 8. **2D CA** generates creature body plans; **1D CA** drives their behavior
 9. **Resources follow CA patterns**, creating rule-characteristic distributions
 10. **Everything is deterministic** - same seed = same world, always
 
 The universe of The Galactic Order isn't randomly generated. It's **grown from constraints**, exactly like the terminal patterns that started this project.
+
+---
+
+## 14. Implementation Status
+
+> **Last updated:** March 2026
+
+### What's Built
+- All of Layers 1-4 are fully implemented and working
+- CA engine: `cellularAutomata.js` — `applyRule()` and `runCA1D()` match the Python original
+- Hash function: `hashSeed.js` — FNV-1a, cross-platform deterministic
+- Heightmap: `heightmap.js` — multi-octave density smoothing
+- Biome map: `biomeMap.js` — 12 biome types from elevation + moisture
+- Flora: `superformula.js` + `caShapeParams.js` + `AlienFlora.js` — Gielis superformula (replaced planned L-systems)
+- Creatures: `CreatureGenerator.js`, `CreatureSystem.js`, `CreatureAI.js` — procedural creature generation and behavior
+- Rock scatter: `RockScatter.js` — CA-derived rock placement using superformula meshes
+- Universe manager: `UniverseManager.js` — star system generation from seeds
+- Terrain chunking: `TerrainChunk.js` + `QuadtreeNode.js` — Pioneer-style quadtree LOD with 5 levels
+- Harmonic Resonance: `harmonicResonance.js` — frequency-based planet mood system (not in original design, added during development)
+- All generation code has unit tests (`tests/client/`)
+
+### Divergences from Original Design
+- **Superformula replaced L-systems**: The Gielis superformula proved more versatile for alien flora generation than L-systems
+- **Harmonic Resonance added**: A frequency-based mood system was added that maps CA-derived frequencies to brainwave bands, influencing atmosphere, fog, wind, and NPC behavior
+- **Quadtree terrain**: Uses Pioneer Space Sim-inspired quadtree LOD instead of simple chunk grid
+- **GPU generation**: Currently uses CPU + Web Workers rather than GPU shader passes for terrain generation
 
 ---
 
