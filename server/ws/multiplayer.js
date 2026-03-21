@@ -8,6 +8,10 @@
  */
 
 import { authenticateSocket } from '../middleware/auth.js';
+import {
+    createShip, removeShip, getShip, getShipsInRoom,
+    joinCrew, leaveCrew, removePlayerFromAllShips, updateShipState,
+} from './shipManager.js';
 
 /** @type {Map<number, {socketId: string, player: object, location: object}>} */
 const activePlayers = new Map();
@@ -93,6 +97,131 @@ export function initMultiplayer(io) {
             }
         });
 
+        // ===========================================================
+        // SHIP FLEET & MULTI-CREW EVENTS
+        // ===========================================================
+
+        // --- Spawn a ship ---
+        socket.on('ship:spawn', ({ classId, position }, callback) => {
+            const data = activePlayers.get(player.id);
+            if (!data?.location) {
+                if (callback) callback({ error: 'No location' });
+                return;
+            }
+
+            const room = `system:${data.location.systemRule}`;
+            const ship = createShip(classId, player.id, room);
+
+            if (position) ship.state.position = position;
+
+            // Broadcast to room
+            socket.to(room).emit('ship:spawned', {
+                shipId: ship.id,
+                classId: ship.classId,
+                ownerId: player.id,
+                ownerName: player.username,
+                state: ship.state,
+            });
+
+            if (callback) callback({ shipId: ship.id });
+        });
+
+        // --- Despawn a ship ---
+        socket.on('ship:despawn', ({ shipId }) => {
+            const ship = getShip(shipId);
+            if (!ship || ship.ownerId !== player.id) return;
+
+            // Notify room
+            for (const room of socket.rooms) {
+                if (room !== socket.id) {
+                    socket.to(room).emit('ship:despawned', { shipId });
+                }
+            }
+            removeShip(shipId);
+        });
+
+        // --- Join a ship crew ---
+        socket.on('crew:join', ({ shipId, roleId }, callback) => {
+            const success = joinCrew(shipId, roleId, player.id, player.username);
+
+            if (success) {
+                const ship = getShip(shipId);
+                // Join ship-specific room for targeted broadcasts
+                socket.join(`ship:${shipId}`);
+
+                // Notify ship crew
+                socket.to(`ship:${shipId}`).emit('crew:joined', {
+                    shipId,
+                    roleId,
+                    playerId: player.id,
+                    username: player.username,
+                });
+
+                // Send roster to the joining player
+                const roster = ship ? Object.fromEntries(ship.crew) : {};
+                if (callback) callback({ success: true, roster, state: ship?.state });
+            } else {
+                if (callback) callback({ success: false, error: 'Station occupied' });
+            }
+        });
+
+        // --- Leave crew station ---
+        socket.on('crew:leave', ({ shipId, roleId }) => {
+            leaveCrew(shipId, roleId);
+            socket.leave(`ship:${shipId}`);
+
+            socket.to(`ship:${shipId}`).emit('crew:left', {
+                shipId,
+                roleId,
+                playerId: player.id,
+            });
+        });
+
+        // --- Ship state update (from pilot, 20Hz) ---
+        socket.on('ship:state', (data) => {
+            if (!data.shipId) return;
+            updateShipState(data.shipId, data);
+
+            // Relay to ship crew and room observers
+            for (const room of socket.rooms) {
+                if (room !== socket.id) {
+                    socket.to(room).emit('ship:state', {
+                        shipId: data.shipId,
+                        ...data,
+                    });
+                }
+            }
+        });
+
+        // --- Crew input (non-pilot → forwarded to pilot) ---
+        socket.on('ship:input', (data) => {
+            if (!data.shipId) return;
+            // Forward to ship crew (pilot will consume relevant inputs)
+            socket.to(`ship:${data.shipId}`).emit('ship:input', {
+                ...data,
+                fromPlayerId: player.id,
+            });
+        });
+
+        // --- System sync (5Hz, all subsystem states) ---
+        socket.on('ship:systems', (data) => {
+            if (!data.shipId) return;
+            socket.to(`ship:${data.shipId}`).emit('ship:systems', data);
+        });
+
+        // --- Ship event (weapon fire, impacts, etc.) ---
+        socket.on('ship:event', (data) => {
+            if (!data.shipId) return;
+            for (const room of socket.rooms) {
+                if (room !== socket.id) {
+                    socket.to(room).emit('ship:event', {
+                        ...data,
+                        fromPlayerId: player.id,
+                    });
+                }
+            }
+        });
+
         // --- Disconnect ---
         socket.on('disconnect', () => {
             const data = activePlayers.get(player.id);
@@ -100,6 +229,17 @@ export function initMultiplayer(io) {
                 const room = `system:${data.location.systemRule}`;
                 socket.to(room).emit('player:left', { id: player.id, username: player.username });
             }
+
+            // Remove player from any ship crews
+            const affectedShips = removePlayerFromAllShips(player.id);
+            for (const shipId of affectedShips) {
+                socket.to(`ship:${shipId}`).emit('crew:left', {
+                    shipId,
+                    playerId: player.id,
+                    reason: 'disconnect',
+                });
+            }
+
             activePlayers.delete(player.id);
             console.log(`  Player disconnected: ${player.username}`);
         });

@@ -91,6 +91,11 @@ const TIER_SETTINGS = {
         lensFlare:               true,
         lensDirt:                true,
         fxaa:                    false,  // TAA handles AA on ULTRA
+        // Ship visual features
+        shipEngineParticles:     true,
+        shipEngineParticleCount: 500,
+        shipPanelNormalMaps:     true,
+        shipShieldDetail:        'high',
     },
 
     // ---- HIGH: slight GTAO reduction, fewer particles ----
@@ -134,6 +139,11 @@ const TIER_SETTINGS = {
         lensFlare:               true,
         lensDirt:                true,
         fxaa:                    false,  // TAA handles AA on HIGH
+        // Ship visual features
+        shipEngineParticles:     true,
+        shipEngineParticleCount: 300,
+        shipPanelNormalMaps:     true,
+        shipShieldDetail:        'high',
     },
 
     // ---- MEDIUM: no GTAO, bloom + grain preserved, halved particles ----
@@ -177,6 +187,11 @@ const TIER_SETTINGS = {
         lensFlare:               false,
         lensDirt:                true,
         fxaa:                    false,  // TAA still active on MEDIUM
+        // Ship visual features
+        shipEngineParticles:     true,
+        shipEngineParticleCount: 100,
+        shipPanelNormalMaps:     true,
+        shipShieldDetail:        'low',
     },
 
     // ---- LOW: no SSAO, reduced bloom + grain, sparse grass ----
@@ -221,6 +236,11 @@ const TIER_SETTINGS = {
         lensFlare:               false,
         lensDirt:                false,
         fxaa:                    true,   // FXAA replaces TAA on LOW
+        // Ship visual features
+        shipEngineParticles:     false,
+        shipEngineParticleCount: 0,
+        shipPanelNormalMaps:     false,
+        shipShieldDetail:        'low',
     },
 
     // ---- POTATO: everything stays ON but at minimum — looks good, runs fast ----
@@ -264,6 +284,11 @@ const TIER_SETTINGS = {
         lensFlare:               false,
         lensDirt:                false,
         fxaa:                    true,   // FXAA replaces TAA on POTATO
+        // Ship visual features
+        shipEngineParticles:     false,
+        shipEngineParticleCount: 0,
+        shipPanelNormalMaps:     false,
+        shipShieldDetail:        'off',
     },
 };
 
