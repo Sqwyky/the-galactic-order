@@ -641,6 +641,22 @@ const miningSystem = new MiningSystem(scene, camera, {
 // Link inventory to tablet
 tablet.setInventory(inventory);
 
+// Wire save/load handlers
+tablet.setSaveHandlers({
+    onSave: async (slot) => {
+        if (!api.isLoggedIn) throw new Error('Not logged in');
+        await api.save(slot, buildSaveState());
+    },
+    onLoad: async (slot) => {
+        if (!api.isLoggedIn) throw new Error('Not logged in');
+        return api.load(slot);
+    },
+    onListSaves: async () => {
+        if (!api.isLoggedIn) return [];
+        return api.listSaves();
+    },
+});
+
 // Performance manager — adaptive quality that looks good on ALL devices
 const perfManager = new PerformanceManager(renderer);
 
@@ -718,6 +734,30 @@ const shipModel = new ShipModel({
 });
 shipModel.setLandingGear(true);
 shipModel.addToScene(scene);
+
+// ---- Station Manager — crew role assignments ----
+const currentClassData = shipModel.classData || SHIP_CLASSES.voidmoth;
+const stationPositions = shipModel.getStationPositions();
+let stationManager = null;
+try {
+    stationManager = new StationManager(currentClassData, stationPositions);
+    stationManager.setLocalPlayer('local');
+    // Auto-assign pilot for single-player
+    stationManager.assignStation('pilot', 'local', 'Player');
+} catch (e) {
+    console.warn('[TGO] StationManager disabled:', e.message);
+}
+
+// ---- Ship Interior — walkable rooms (only for larger ships) ----
+let shipInterior = null;
+if (currentClassData.hasWalkableInterior) {
+    try {
+        shipInterior = new ShipInterior(shipModel.group, currentClassData, stationPositions);
+        console.log('[TGO] Ship interior generated for', currentClassData.name);
+    } catch (e) {
+        console.warn('[TGO] Ship interior disabled:', e.message);
+    }
+}
 
 // Ship position — placed 15m away from landing spot
 const shipSpawnOffset = new THREE.Vector3(15, 0, 10);
@@ -1556,6 +1596,8 @@ const systems = {
     questSystem,
 
     // Ship crew/interior
+    stationManager,
+    shipInterior,
     hudManager,
 
     // Planet identity (mutable — updated on planet transition)
@@ -1590,6 +1632,22 @@ gameManager.start();
 
 console.log('[TGO] GameManager started — all systems orchestrated');
 
+// ============================================================
+// AUTO-LOGIN — guest session for save/load support
+// ============================================================
+(async () => {
+    if (!api.isLoggedIn) {
+        try {
+            await api.loginAsGuest();
+            console.log('[TGO] Logged in as guest — save system active');
+        } catch (e) {
+            console.warn('[TGO] Guest login failed (server offline?) — saves disabled:', e.message);
+        }
+    } else {
+        console.log('[TGO] Resuming existing session');
+    }
+})();
+
 // Debug access (expose to window for testing)
 window._debug = {
     get scene() { return scene; },
@@ -1621,6 +1679,8 @@ window._debug = {
     get gameManager() { return gameManager; },
     get quests() { return questSystem; },
     get hudManager() { return hudManager; },
+    get stations() { return stationManager; },
+    get interior() { return shipInterior; },
     get api() { return api; },
     setWeather: (state) => weatherSystem && weatherSystem.setWeather(state),
     setResolution: (scale) => resolutionScaler && resolutionScaler.setScale(scale),

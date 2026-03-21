@@ -227,6 +227,25 @@ export class GameManager {
             });
         }
 
+        // ---- HUD Manager — role-aware HUD switching ----
+
+        if (s.hudManager) {
+            engine.register('hudManager', s.hudManager, {
+                phases: ['FLIGHT'],
+                priority: 85,
+                update: (dt) => {
+                    if (s.hudManager.activeHUD) {
+                        s.hudManager.update({
+                            power: s.powerSystem ? s.powerSystem.getState() : null,
+                            damage: s.damageSystem ? s.damageSystem.getState() : null,
+                            flight: s.flightController ? s.flightController.getHUDInfo() : null,
+                            weapons: s.weaponSystem ? s.weaponSystem.getHUDInfo() : null,
+                        });
+                    }
+                },
+            });
+        }
+
         // ---- Multiplayer sync ----
 
         if (s.shipSyncManager) {
@@ -269,6 +288,13 @@ export class GameManager {
             const dist = s.camera.position.distanceTo(s.shipModel.group.position);
             if (dist < 8) this.enterShip();
         } else if (this.currentPhase === 'FLIGHT') {
+            // If ship has walkable interior and station manager, try station interaction first
+            if (s.stationManager && s.shipInterior) {
+                const localPos = s.camera.position.clone().sub(s.shipModel.group.position);
+                if (s.stationManager.handleInteraction(localPos)) {
+                    return; // Handled by station manager
+                }
+            }
             this.exitShip();
         }
     }

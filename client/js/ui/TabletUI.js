@@ -76,6 +76,7 @@ export class TabletUI {
                     <button class="tab-btn" data-tab="log">LOG</button>
                     <button class="tab-btn" data-tab="cipher">CIPHER</button>
                     <button class="tab-btn" data-tab="key">KEY</button>
+                    <button class="tab-btn" data-tab="saves">SAVES</button>
                 </div>
 
                 <div class="tablet-content">
@@ -171,6 +172,17 @@ export class TabletUI {
                         </div>
                     </div>
                 </div>
+
+                    <!-- SAVES TAB -->
+                    <div class="tab-panel" id="tab-saves">
+                        <div class="scan-header">SAVE / LOAD</div>
+                        <div id="saveSlots" class="save-slots">
+                            <div class="save-status" id="saveStatus">Checking connection...</div>
+                        </div>
+                        <div class="save-actions">
+                            <button class="save-btn" id="quickSaveBtn">QUICK SAVE (Slot 0)</button>
+                        </div>
+                    </div>
 
                 <div class="tablet-footer">
                     <span id="tabletCoords">---</span>
@@ -383,6 +395,32 @@ export class TabletUI {
                 font-size: 10px;
                 margin-top: 12px;
             }
+
+            /* Save/Load slots */
+            .save-slots { margin-bottom: 16px; }
+            .save-status { color: #445; font-size: 10px; text-align: center; padding: 12px 0; }
+            .save-slot {
+                display: flex; justify-content: space-between; align-items: center;
+                padding: 8px 12px; border: 1px solid rgba(0,255,136,0.1);
+                margin-bottom: 4px; transition: all 0.3s; cursor: pointer;
+            }
+            .save-slot:hover { border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.03); }
+            .save-slot .slot-id { color: #00ff88; font-size: 10px; width: 60px; }
+            .save-slot .slot-info { color: #667; font-size: 10px; flex: 1; }
+            .save-slot .slot-actions { display: flex; gap: 6px; }
+            .save-slot .slot-btn {
+                background: transparent; border: 1px solid rgba(0,255,136,0.2);
+                color: #889; font-family: 'Courier New', monospace; font-size: 9px;
+                padding: 3px 8px; cursor: pointer; transition: all 0.3s;
+            }
+            .save-slot .slot-btn:hover { border-color: #00ff88; color: #00ff88; }
+            .save-actions { text-align: center; margin-top: 12px; }
+            .save-btn {
+                background: transparent; border: 1px solid rgba(0,255,136,0.3);
+                color: #00ff88; font-family: 'Courier New', monospace; font-size: 11px;
+                letter-spacing: 2px; padding: 8px 24px; cursor: pointer; transition: all 0.3s;
+            }
+            .save-btn:hover { background: rgba(0,255,136,0.15); }
 
             .tablet-footer {
                 display: flex;
@@ -597,6 +635,7 @@ export class TabletUI {
             this._updateTime();
             this.updateInventory();
             this.updateRefinery();
+            this.updateSaves();
         } else {
             this.container.classList.remove('open');
         }
@@ -653,6 +692,96 @@ export class TabletUI {
     setCoordinates(x, y, z) {
         const el = this.container.querySelector('#tabletCoords');
         if (el) el.textContent = `POS: ${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`;
+    }
+
+    /**
+     * Set save/load callbacks.
+     * @param {Object} handlers - { onSave(slot), onLoad(slot), onListSaves() }
+     */
+    setSaveHandlers(handlers) {
+        this._saveHandlers = handlers;
+
+        // Wire quick save button
+        const quickSaveBtn = this.container.querySelector('#quickSaveBtn');
+        if (quickSaveBtn) {
+            quickSaveBtn.addEventListener('click', async () => {
+                if (!this._saveHandlers?.onSave) return;
+                const status = this.container.querySelector('#saveStatus');
+                if (status) status.textContent = 'Saving...';
+                try {
+                    await this._saveHandlers.onSave(0);
+                    if (status) status.textContent = 'Saved to Slot 0.';
+                    this.addDiscovery('Game saved.', 'info');
+                } catch (e) {
+                    if (status) status.textContent = `Save failed: ${e.message}`;
+                }
+            });
+        }
+    }
+
+    /**
+     * Refresh the saves tab display.
+     */
+    async updateSaves() {
+        if (!this._saveHandlers?.onListSaves) return;
+        const slotsEl = this.container.querySelector('#saveSlots');
+        const statusEl = this.container.querySelector('#saveStatus');
+        if (!slotsEl) return;
+
+        try {
+            const saves = await this._saveHandlers.onListSaves();
+            if (!saves || saves.length === 0) {
+                if (statusEl) statusEl.textContent = 'No saves found. Use Quick Save to create one.';
+                return;
+            }
+            if (statusEl) statusEl.textContent = `${saves.length} save(s) found.`;
+
+            // Render existing saves
+            let html = '';
+            for (const save of saves) {
+                const date = save.updated_at ? new Date(save.updated_at).toLocaleString() : 'Unknown';
+                html += `<div class="save-slot" data-slot="${save.slot}">
+                    <span class="slot-id">SLOT ${save.slot}</span>
+                    <span class="slot-info">Rule ${save.system_rule || '?'} · ${date}</span>
+                    <span class="slot-actions">
+                        <button class="slot-btn slot-load" data-slot="${save.slot}">LOAD</button>
+                        <button class="slot-btn slot-save" data-slot="${save.slot}">SAVE</button>
+                    </span>
+                </div>`;
+            }
+            slotsEl.innerHTML = (statusEl ? `<div class="save-status">${statusEl.textContent}</div>` : '') + html;
+
+            // Bind load/save buttons
+            slotsEl.querySelectorAll('.slot-load').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const slot = parseInt(btn.dataset.slot);
+                    if (this._saveHandlers?.onLoad) {
+                        try {
+                            await this._saveHandlers.onLoad(slot);
+                            this.addDiscovery(`Loaded save from Slot ${slot}.`, 'info');
+                        } catch (e) {
+                            this.addDiscovery(`Load failed: ${e.message}`, 'info');
+                        }
+                    }
+                });
+            });
+            slotsEl.querySelectorAll('.slot-save').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const slot = parseInt(btn.dataset.slot);
+                    if (this._saveHandlers?.onSave) {
+                        try {
+                            await this._saveHandlers.onSave(slot);
+                            this.addDiscovery(`Saved to Slot ${slot}.`, 'info');
+                            this.updateSaves(); // Refresh list
+                        } catch (e) {
+                            this.addDiscovery(`Save failed: ${e.message}`, 'info');
+                        }
+                    }
+                });
+            });
+        } catch (e) {
+            if (statusEl) statusEl.textContent = `Connection error: ${e.message}`;
+        }
     }
 
     // ============================================================
