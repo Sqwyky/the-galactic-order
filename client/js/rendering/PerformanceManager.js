@@ -7,7 +7,9 @@
  * Monitors FPS and automatically adjusts rendering quality across
  * the full pipeline:
  * - Post-processing passes (GTAO, bloom, film grain, TAA, SSR, SSGI,
- *   motion blur, DOF, contact shadows, atmosphere, volumetric clouds)
+ *   motion blur, DOF, contact shadows, atmosphere, volumetric clouds,
+ *   lens flare, lens dirt, FXAA)
+ * - Dynamic resolution scaling (50-100% based on tier)
  * - Terrain material features (cloud shadows, water caustics)
  * - Particle counts (atmospheric, mining, weather)
  * - Vegetation density (grass, flora)
@@ -84,6 +86,11 @@ const TIER_SETTINGS = {
         ssgiRays:                8,
         ssgiSteps:               16,
         ssgiIntensity:           0.5,
+        // Visual quality features
+        resolutionScale:         1.0,
+        lensFlare:               true,
+        lensDirt:                true,
+        fxaa:                    false,  // TAA handles AA on ULTRA
     },
 
     // ---- HIGH: slight GTAO reduction, fewer particles ----
@@ -122,6 +129,11 @@ const TIER_SETTINGS = {
         ssgiRays:                4,
         ssgiSteps:               8,
         ssgiIntensity:           0.4,
+        // Visual quality features
+        resolutionScale:         1.0,
+        lensFlare:               true,
+        lensDirt:                true,
+        fxaa:                    false,  // TAA handles AA on HIGH
     },
 
     // ---- MEDIUM: no GTAO, bloom + grain preserved, halved particles ----
@@ -160,6 +172,11 @@ const TIER_SETTINGS = {
         ssgiRays:                4,
         ssgiSteps:               8,
         ssgiIntensity:           0.4,
+        // Visual quality features
+        resolutionScale:         0.85,
+        lensFlare:               false,
+        lensDirt:                true,
+        fxaa:                    false,  // TAA still active on MEDIUM
     },
 
     // ---- LOW: no SSAO, reduced bloom + grain, sparse grass ----
@@ -199,6 +216,11 @@ const TIER_SETTINGS = {
         ssgiRays:                4,
         ssgiSteps:               8,
         ssgiIntensity:           0.4,
+        // Visual quality features
+        resolutionScale:         0.7,
+        lensFlare:               false,
+        lensDirt:                false,
+        fxaa:                    true,   // FXAA replaces TAA on LOW
     },
 
     // ---- POTATO: everything stays ON but at minimum — looks good, runs fast ----
@@ -237,6 +259,11 @@ const TIER_SETTINGS = {
         ssgiRays:                4,
         ssgiSteps:               8,
         ssgiIntensity:           0.4,
+        // Visual quality features
+        resolutionScale:         0.5,
+        lensFlare:               false,
+        lensDirt:                false,
+        fxaa:                    true,   // FXAA replaces TAA on POTATO
     },
 };
 
@@ -317,6 +344,12 @@ export class PerformanceManager {
         this._ssgiPass           = null;
         this._weatherSystem      = null;
         this._triplanarMaterial  = null;
+
+        // ---- Visual quality features ----
+        this._lensFlarePass      = null;
+        this._lensDirtPass       = null;
+        this._fxaaPass           = null;
+        this._resolutionScaler   = null;
 
         // ---- Device capabilities (populated by _detectHardware) ----
         this.deviceInfo = {
@@ -612,6 +645,12 @@ export class PerformanceManager {
         if (passes.weatherSystem !== undefined) this._weatherSystem = passes.weatherSystem;
         if (passes.triplanarMaterial !== undefined) this._triplanarMaterial = passes.triplanarMaterial;
 
+        // Visual quality features
+        if (passes.lensFlarePass !== undefined) this._lensFlarePass = passes.lensFlarePass;
+        if (passes.lensDirtPass !== undefined) this._lensDirtPass = passes.lensDirtPass;
+        if (passes.fxaaPass !== undefined) this._fxaaPass = passes.fxaaPass;
+        if (passes.resolutionScaler !== undefined) this._resolutionScaler = passes.resolutionScaler;
+
         this._syncPasses();
     }
 
@@ -781,6 +820,28 @@ export class PerformanceManager {
         // Weather system particle multiplier
         if (this._weatherSystem) {
             this._weatherSystem.setParticleMultiplier(cfg.particleMultiplier);
+        }
+
+        // ---- Visual Quality Features ----
+
+        // Dynamic resolution scaling
+        if (this._resolutionScaler) {
+            this._resolutionScaler.setScale(cfg.resolutionScale);
+        }
+
+        // Lens flare
+        if (this._lensFlarePass) {
+            this._lensFlarePass.setQuality(tierName.toLowerCase());
+        }
+
+        // Lens dirt
+        if (this._lensDirtPass) {
+            this._lensDirtPass.setQuality(tierName.toLowerCase());
+        }
+
+        // FXAA fallback (enabled when TAA is off)
+        if (this._fxaaPass) {
+            this._fxaaPass.enabled = cfg.fxaa;
         }
     }
 

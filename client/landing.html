@@ -291,6 +291,10 @@ import { DOFPass } from './js/rendering/DOFPass.js';
 import { ContactShadowPass } from './js/rendering/ContactShadowPass.js';
 import { SSGIPass } from './js/rendering/SSGIPass.js';
 import { WeatherSystem, WEATHER_STATE } from './js/rendering/WeatherSystem.js';
+import { LensFlarePass } from './js/rendering/LensFlarePass.js';
+import { LensDirtPass } from './js/rendering/LensDirtPass.js';
+import { FXAAPass } from './js/rendering/FXAAPass.js';
+import { ResolutionScaler } from './js/rendering/ResolutionScaler.js';
 import { eventBus } from './js/core/EventBus.js';
 import { PlanetTransition } from './js/core/PlanetTransition.js';
 
@@ -333,6 +337,9 @@ const canvas = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+// Dynamic resolution scaling — render at lower res on weak devices, native on strong
+const resolutionScaler = new ResolutionScaler(renderer, canvas);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 // Soft shadow maps — controlled by performance tier (disabled on LOW/POTATO)
@@ -704,6 +711,24 @@ const bloomPass = new UnrealBloomPass(
 );
 composer.addPass(bloomPass);
 
+// 2026: Screen-Space Lens Flare — cinematic sun flares with ghosts + halo
+let lensFlarePass = null;
+try {
+    lensFlarePass = new LensFlarePass();
+    composer.addPass(lensFlarePass);
+} catch (e) {
+    console.warn('[TGO] Lens flare disabled:', e.message);
+}
+
+// 2026: Lens Dirt Bloom Overlay — procedural dust/smudge pattern on bright areas
+let lensDirtPass = null;
+try {
+    lensDirtPass = new LensDirtPass();
+    composer.addPass(lensDirtPass);
+} catch (e) {
+    console.warn('[TGO] Lens dirt disabled:', e.message);
+}
+
 // 2026: Auto-Exposure / Eye Adaptation — cinematic brightness adjustment
 let autoExposure = null;
 try {
@@ -753,6 +778,16 @@ try {
 
 // Film grain — 70s sci-fi texture, stronger in dark areas
 composer.addPass(filmGrainPass);
+
+// FXAA — fallback anti-aliasing for LOW/POTATO tiers (when TAA is disabled)
+let fxaaPass = null;
+try {
+    fxaaPass = new FXAAPass();
+    fxaaPass.enabled = false; // Disabled by default, PerformanceManager enables on LOW/POTATO
+    composer.addPass(fxaaPass);
+} catch (e) {
+    console.warn('[TGO] FXAA disabled:', e.message);
+}
 
 // Output pass (applies tone mapping to final output)
 composer.addPass(new OutputPass());
@@ -926,6 +961,7 @@ perfManager.registerPasses({
     skyDome, csmManager,
     motionBlurPass, dofPass, contactShadowPass, ssgiPass,
     weatherSystem, triplanarMaterial,
+    lensFlarePass, lensDirtPass, fxaaPass, resolutionScaler,
 });
 
 // Set bloom base strength from planet mood (dreamy Delta = more bloom, etc.)
@@ -1658,13 +1694,15 @@ function onLanded() {
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    composer.setSize(window.innerWidth, window.innerHeight);
-    if (taaPass) taaPass.setSize(window.innerWidth, window.innerHeight);
-    if (gtaoPass) gtaoPass.setSize(window.innerWidth, window.innerHeight);
-    if (atmospherePass) atmospherePass.setSize(window.innerWidth, window.innerHeight);
-    if (volumetricClouds) volumetricClouds.setSize(window.innerWidth, window.innerHeight);
-    if (ssrPass) ssrPass.setSize(window.innerWidth, window.innerHeight);
+    // Resolution scaler handles renderer.setSize with scale factor
+    resolutionScaler.resize(window.innerWidth, window.innerHeight);
+    const scaled = resolutionScaler.getScaledSize();
+    composer.setSize(scaled.width, scaled.height);
+    if (taaPass) taaPass.setSize(scaled.width, scaled.height);
+    if (gtaoPass) gtaoPass.setSize(scaled.width, scaled.height);
+    if (atmospherePass) atmospherePass.setSize(scaled.width, scaled.height);
+    if (volumetricClouds) volumetricClouds.setSize(scaled.width, scaled.height);
+    if (ssrPass) ssrPass.setSize(scaled.width, scaled.height);
 });
 
 // ============================================================
@@ -1876,6 +1914,18 @@ function animate() {
     // Weather system update
     if (weatherSystem) weatherSystem.update(dt, camera.position);
 
+    // Update lens flare sun screen position
+    if (lensFlarePass && lensFlarePass.enabled) {
+        const sunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
+        const sunWorldPos = camera.position.clone().add(sunDir.multiplyScalar(1000));
+        const sunNDC = sunWorldPos.project(camera);
+        // Convert NDC (-1..1) to UV (0..1)
+        lensFlarePass.setSunScreenPosition(
+            sunNDC.x * 0.5 + 0.5,
+            sunNDC.y * 0.5 + 0.5
+        );
+    }
+
     // Render with full post-processing pipeline
     // TAA jitter: offset camera projection before render, restore after
     taaPass.applyJitter();
@@ -1921,7 +1971,11 @@ window._debug = {
     get csm() { return csmManager; },
     get phase() { return currentPhase; },
     get weather() { return weatherSystem; },
+    get lensFlare() { return lensFlarePass; },
+    get lensDirt() { return lensDirtPass; },
+    get resolution() { return resolutionScaler; },
     setWeather: (state) => weatherSystem && weatherSystem.setWeather(state),
+    setResolution: (scale) => resolutionScaler && resolutionScaler.setScale(scale),
     warpTo: (rule, seed) => planetTransition.execute(rule, seed),
 };
 

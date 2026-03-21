@@ -562,13 +562,24 @@ const TRIPLANAR_FRAGMENT = /* glsl */ `
         ambient *= ao;
 
         // ---- SUBSURFACE SCATTERING (for grassy/vegetated areas) ----
-        // When looking through thin vegetation, light passes through
-        float sss = pow(max(dot(V, -L), 0.0), 4.0);
-        float vegetationFactor = (1.0 - slopeBlend) * (1.0 - frostFactor) * smoothstep(0.5, 3.0, vElevation);
-        vec3 sssColor = baseColor * vec3(1.3, 1.1, 0.8) * sss * vegetationFactor * 0.15;
+        // Wrap lighting — half-lambert wrapped diffuse for softer light around vegetation
+        float wrapDiffuse = max(0.0, (dot(finalNormal, L) + 0.5) / 1.5);
+
+        // View-dependent translucency — light passing through thin leaves when backlit
+        float transmission = pow(max(dot(V, -L), 0.0), 3.0);
+        float translucency = (wrapDiffuse * 0.6 + transmission * 0.4);
+
+        // Richer SSS color — warm green/amber like sunlight through leaves
+        vec3 sssColor = mix(baseColor, vec3(0.4, 0.55, 0.15), 0.3) * vec3(1.4, 1.15, 0.7);
+
+        // Elevation-based intensity — more SSS in grassy lowlands, less on high barren ground
+        float vegetationFactor = (1.0 - slopeBlend) * (1.0 - frostFactor) * smoothstep(0.5, 3.0, vElevation) * smoothstep(12.0, 6.0, vElevation);
+
+        // Final SSS contribution
+        vec3 sssResult = sssColor * translucency * vegetationFactor * 0.25;
 
         // ---- COMBINE ----
-        vec3 color = directLight + ambient + sssColor;
+        vec3 color = directLight + ambient + sssResult;
 
         // ---- FOG ----
         float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vFogDepth * vFogDepth);
