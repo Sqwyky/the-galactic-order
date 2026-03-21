@@ -270,6 +270,9 @@ import { CascadeShadowManager } from './js/rendering/CascadeShadowManager.js';
 // Creature system
 import { CreatureSystem } from './js/creatures/CreatureSystem.js';
 
+// Audio system
+import { AudioSystem } from './js/audio/AudioSystem.js';
+
 // Post-processing imports
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -518,6 +521,17 @@ console.log(`[TGO] Planet mood: ${planetMood.bandLabel} (${planetMood.moodName})
     `@ ${planetFreq.frequency.toFixed(2)}Hz (${planetNote.display}) ` +
     `| Schumann distance: ${planetFreq.schumannDistance.toFixed(2)}Hz` +
     (planetMood.isSchumannResonant ? ' ★ RESONANT' : ''));
+
+// ---- Audio System — procedural sound from planet frequency ----
+const audioSystem = new AudioSystem();
+audioSystem.init();
+audioSystem.setPlanet({
+    rule: planetRule,
+    seed: planetSeed,
+    mood: planetMood,
+    frequency: planetFreq,
+    archetype: classification.label,
+});
 
 // Fog density driven by planet mood (Delta = thick fog, Alpha = clear, Gamma = toxic haze)
 let moodFogDensity = planetMood.atmosphere.fogDensity;
@@ -929,7 +943,9 @@ const miningSystem = new MiningSystem(scene, camera, {
         if (el) {
             miningHUD.showPickup(el.symbol, quantity, el.color, bonus);
             tablet.addDiscovery(`Mined ${quantity} ${el.name} (${el.symbol})${bonus ? ' — ' + bonus : ''}`);
+            audioSystem.resourceCollected(elementId);
         }
+        audioSystem.destruction();
     },
 });
 
@@ -1307,6 +1323,15 @@ planetTransition.register('uiAndState', {
         });
         tablet.addDiscovery(`Warped to ${planetData.name} (Rule ${planetData.rule}).`, 'discovery');
 
+        // Reconfigure audio for new planet
+        audioSystem.setPlanet({
+            rule: planetData.rule,
+            seed: planetData.seed,
+            mood: planetData.mood,
+            frequency: planetData.freq,
+            archetype: planetData.classification.label,
+        });
+
         // Reset descent state machine
         descentProgress = 0;
         descentLanded = false;
@@ -1333,7 +1358,10 @@ planetTransition.register('uiAndState', {
     },
 });
 
-hyperspaceSystem.onJump = (newRule, newSeed) => planetTransition.execute(newRule, newSeed);
+hyperspaceSystem.onJump = (newRule, newSeed) => {
+    audioSystem.hyperspaceJump();
+    planetTransition.execute(newRule, newSeed);
+};
 
 // World position helper (for when camera is child of ship)
 const _shipWorldPos = new THREE.Vector3();
@@ -1818,6 +1846,21 @@ function animate() {
         );
         sunLight.target.updateMatrixWorld();
 
+        // ---- Audio update (surface) ----
+        const miningInfo2 = miningSystem.getHUDInfo();
+        audioSystem.update(dt, {
+            playerPos: camera.position,
+            isGrounded: walker.isGrounded,
+            isMoving: walker.velocity.x !== 0 || walker.velocity.z !== 0,
+            isSprinting: walker.isSprinting,
+            isMining: miningInfo2.isFiring,
+            miningHeat: miningInfo2.heatPct,
+            weatherState: weatherSystem ? weatherSystem.weather : 'clear',
+            windStrength: windField ? windField.baseStrength : 0.1,
+            altitude: camera.position.y,
+            oceanLevel: TERRAIN_CONFIG.waterLevel || 0,
+        });
+
         // Check ship proximity (show "Press E" prompt)
         if (shipGrounded) {
             const distToShip = camera.position.distanceTo(shipModel.group.position);
@@ -1865,12 +1908,21 @@ function animate() {
         // Weapons
         weaponSystem.update(dt);
 
-        // Scanner
+        // Scanner (with audio trigger)
+        const wasScanning = scannerSystem.isScanning;
         scannerSystem.update(dt, _shipWorldPos);
+        if (!wasScanning && scannerSystem.isScanning) {
+            audioSystem.scannerPulse();
+        }
 
         // Hyperspace
         const flightInfo = flightController.getHUDInfo();
         hyperspaceSystem.update(dt, flightInfo.altitude);
+
+        // Audio: hyperspace charge sound
+        if (hyperspaceSystem.isCharging) {
+            audioSystem.hyperspaceCharge(hyperspaceSystem.chargeProgress);
+        }
 
         // Sun follows ship (shadow camera tracks too)
         sunLight.position.set(
@@ -1880,6 +1932,23 @@ function animate() {
         );
         sunLight.target.position.set(_shipWorldPos.x, 0, _shipWorldPos.z);
         sunLight.target.updateMatrixWorld();
+
+        // ---- Audio update (flight) ----
+        audioSystem.update(dt, {
+            playerPos: _shipWorldPos,
+            isGrounded: false,
+            isMoving: false,
+            isSprinting: false,
+            isMining: false,
+            miningHeat: 0,
+            weatherState: weatherSystem ? weatherSystem.weather : 'clear',
+            windStrength: windField ? windField.baseStrength : 0.1,
+            altitude: flightInfo.altitude,
+            oceanLevel: TERRAIN_CONFIG.waterLevel || 0,
+            shipThrottle: flightInfo.thrust || 0,
+            afterburner: flightInfo.isBoosting,
+            shipSpeed: flightInfo.speed,
+        });
 
         // Ship HUD
         shipHUD.update(flightInfo, weaponSystem.getHUDInfo());
