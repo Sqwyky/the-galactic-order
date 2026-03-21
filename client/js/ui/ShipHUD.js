@@ -23,6 +23,9 @@ export class ShipHUD {
         this.boostBar = null;
         this.crosshair = null;
         this.promptEl = null;
+        this.fuelBar = null;
+        this.fuelLabel = null;
+        this.lowFuelEl = null;
 
         this._build();
         document.body.appendChild(this.container);
@@ -154,6 +157,48 @@ export class ShipHUD {
                 "></div>
             </div>
 
+            <!-- Fuel gauge (left side) -->
+            <div style="
+                position: absolute;
+                top: 130px;
+                left: 20px;
+            ">
+                <div id="ship-fuel-label" style="
+                    color: #557766;
+                    font-size: 9px;
+                    letter-spacing: 2px;
+                    margin-bottom: 3px;
+                ">FUEL</div>
+                <div style="width: 100px; height: 4px; background: #111; border: 1px solid #223;">
+                    <div id="ship-fuel-bar" style="
+                        width: 100%;
+                        height: 100%;
+                        background: linear-gradient(90deg, #00ff88, #33ffcc);
+                        transition: width 0.3s;
+                    "></div>
+                </div>
+                <div id="ship-fuel-pct" style="
+                    color: #557766;
+                    font-size: 9px;
+                    letter-spacing: 1px;
+                    margin-top: 2px;
+                ">100%</div>
+            </div>
+
+            <!-- LOW FUEL warning (center, flashing) -->
+            <div id="ship-low-fuel" style="
+                position: absolute;
+                top: 35%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                color: #ff4444;
+                font-size: 18px;
+                letter-spacing: 6px;
+                text-shadow: 0 0 15px rgba(255,68,68,0.5);
+                opacity: 0;
+                transition: opacity 0.2s;
+            ">LOW FUEL</div>
+
             <!-- Controls reminder (bottom right) -->
             <div style="
                 position: absolute;
@@ -197,6 +242,10 @@ export class ShipHUD {
         this.boostLabel = this.container.querySelector('#ship-boost-label');
         this.coordsEl = this.container.querySelector('#ship-coords');
         this.promptEl = this.container.querySelector('#ship-enter-prompt');
+        this.fuelBar = this.container.querySelector('#ship-fuel-bar');
+        this.fuelLabel = this.container.querySelector('#ship-fuel-label');
+        this.fuelPct = this.container.querySelector('#ship-fuel-pct');
+        this.lowFuelEl = this.container.querySelector('#ship-low-fuel');
     }
 
     show() {
@@ -249,6 +298,33 @@ export class ShipHUD {
 
         // Coordinates
         this.coordsEl.textContent = `X:${flightInfo.x} Z:${flightInfo.z}`;
+
+        // Fuel gauge
+        if (flightInfo.fuel !== undefined && flightInfo.maxFuel) {
+            const fuelPct = (flightInfo.fuel / flightInfo.maxFuel) * 100;
+            this.fuelBar.style.width = `${fuelPct}%`;
+            this.fuelPct.textContent = `${Math.round(fuelPct)}%`;
+
+            // Color: green → yellow → red as fuel drops
+            if (fuelPct < 20) {
+                this.fuelBar.style.background = '#ff4444';
+                this.fuelLabel.style.color = '#ff4444';
+            } else if (fuelPct < 50) {
+                this.fuelBar.style.background = 'linear-gradient(90deg, #ffcc44, #ff8844)';
+                this.fuelLabel.style.color = '#ffcc44';
+            } else {
+                this.fuelBar.style.background = 'linear-gradient(90deg, #00ff88, #33ffcc)';
+                this.fuelLabel.style.color = '#557766';
+            }
+
+            // LOW FUEL flashing warning
+            if (flightInfo.lowFuelWarning) {
+                const blink = Math.sin(performance.now() / 200) > 0;
+                this.lowFuelEl.style.opacity = blink ? '1' : '0.3';
+            } else {
+                this.lowFuelEl.style.opacity = '0';
+            }
+        }
 
         // Weapon
         if (weaponInfo) {

@@ -197,10 +197,10 @@ export class SSGIPass extends Pass {
                         }
                     }
 
-                    // Average indirect light
+                    // Average indirect light — normalize by actual hit count
                     if (hitCount > 0.0) {
-                        indirectLight /= uRayCount; // Normalize by total rays, not hits
-                        indirectLight *= uIntensity * distFade;
+                        indirectLight /= hitCount;
+                        indirectLight *= uIntensity * distFade * (hitCount / uRayCount);
                         sceneColor.rgb += indirectLight;
                     }
 

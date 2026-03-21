@@ -22,7 +22,7 @@ export class ShipAudio {
      * @param {AudioContext} ctx
      * @param {GainNode} output
      */
-    constructor(ctx, output) {
+    constructor(ctx, output, sharedNoiseBuffer) {
         this.ctx = ctx;
         this.output = output;
 
@@ -42,8 +42,8 @@ export class ShipAudio {
         this._running = false;
         this._currentThrottle = 0;
 
-        // Noise buffer
-        this._noiseBuffer = this._createNoiseBuffer(3.0);
+        // Noise buffer (use shared if provided)
+        this._noiseBuffer = sharedNoiseBuffer || this._createNoiseBuffer(3.0);
     }
 
     // ============================================================

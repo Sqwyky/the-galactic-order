@@ -41,6 +41,8 @@ export class AutoExposurePass extends Pass {
         this._currentExposure = 1.0;
         this._currentLuminance = 0.25;
         this._lastTime = 0;
+        this._frameCount = 0;
+        this._readbackInterval = 4; // Only read GPU data every N frames
 
         // Luminance measurement material (downsamples and computes average)
         this._luminanceMaterial = new THREE.ShaderMaterial({
@@ -129,16 +131,19 @@ export class AutoExposurePass extends Pass {
 
     render(renderer, writeBuffer, readBuffer, deltaTime) {
         const dt = deltaTime || 0.016;
+        this._frameCount++;
 
         // ---- Step 1: Measure average luminance ----
-        this._luminanceMaterial.uniforms.tDiffuse.value = readBuffer.texture;
-        renderer.setRenderTarget(this._luminanceRT);
-        this._luminanceQuad.render(renderer);
+        // Only perform GPU readback every N frames to avoid sync stalls
+        if (this._frameCount % this._readbackInterval === 0) {
+            this._luminanceMaterial.uniforms.tDiffuse.value = readBuffer.texture;
+            renderer.setRenderTarget(this._luminanceRT);
+            this._luminanceQuad.render(renderer);
 
-        // Read back the 1x1 pixel (average luminance)
-        renderer.readRenderTargetPixels(
-            this._luminanceRT, 0, 0, 1, 1, this._readBuffer
-        );
+            renderer.readRenderTargetPixels(
+                this._luminanceRT, 0, 0, 1, 1, this._readBuffer
+            );
+        }
         const measuredLuminance = this._readBuffer[0];
 
         // ---- Step 2: Smoothly adapt exposure ----

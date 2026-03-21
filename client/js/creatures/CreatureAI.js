@@ -21,10 +21,51 @@ import { hashSeed } from '../generation/hashSeed.js';
 // ============================================================
 
 export const CREATURE_STATE = {
-    IDLE:   'idle',
-    WANDER: 'wander',
-    FLEE:   'flee',
-    GRAZE:  'graze',
+    IDLE:    'idle',
+    WANDER:  'wander',
+    FLEE:    'flee',
+    GRAZE:   'graze',
+    CURIOUS: 'curious',  // Approaches player cautiously (Class 4)
+    HUNT:    'hunt',      // Pursues smaller creatures (Class 3)
+    HERD:    'herd',      // Moves toward nearest peer (Class 4)
+};
+
+// ============================================================
+// WOLFRAM CLASS BEHAVIOR PROFILES
+// ============================================================
+// Maps CA Wolfram class to creature behavior weights and parameters
+
+const CLASS_PROFILES = {
+    1: { // Uniform — docile, slow, long idles
+        idleWeight: 0.6, wanderWeight: 0.2, grazeWeight: 0.2, curiousWeight: 0,
+        idleDurationMin: 3, idleDurationMax: 8,
+        fleeMultiplier: 0.6,    // Barely reacts to player
+        moveSpeedMult: 0.5,
+        wanderRadiusMult: 0.5,
+    },
+    2: { // Periodic — territorial, predictable patrol, returns to spawn
+        idleWeight: 0.3, wanderWeight: 0.5, grazeWeight: 0.2, curiousWeight: 0,
+        idleDurationMin: 1, idleDurationMax: 3,
+        fleeMultiplier: 1.0,
+        moveSpeedMult: 1.0,
+        wanderRadiusMult: 0.7,  // Stays closer to spawn
+    },
+    3: { // Chaotic — aggressive, erratic movement, fast flee
+        idleWeight: 0.15, wanderWeight: 0.5, grazeWeight: 0.1, curiousWeight: 0.05,
+        huntWeight: 0.2,        // Can hunt
+        idleDurationMin: 0.5, idleDurationMax: 1.5,
+        fleeMultiplier: 1.5,
+        moveSpeedMult: 1.4,
+        wanderRadiusMult: 1.5,  // Erratic, wanders far
+    },
+    4: { // Complex — curious about player, herding behavior
+        idleWeight: 0.2, wanderWeight: 0.25, grazeWeight: 0.15, curiousWeight: 0.25,
+        herdWeight: 0.15,
+        idleDurationMin: 1, idleDurationMax: 4,
+        fleeMultiplier: 1.2,
+        moveSpeedMult: 1.0,
+        wanderRadiusMult: 1.0,
+    },
 };
 
 // ============================================================
@@ -42,34 +83,46 @@ export class CreatureAI {
      * @param {number} options.seed - Per-creature seed for deterministic behavior
      */
     constructor(options = {}) {
-        this.moveSpeed = options.moveSpeed || 2.0;
+        // Wolfram class determines behavior profile
+        this.wolframClass = options.wolframClass || 2;
+        this.profile = CLASS_PROFILES[this.wolframClass] || CLASS_PROFILES[2];
+
+        this.moveSpeed = (options.moveSpeed || 2.0) * this.profile.moveSpeedMult;
         this.turnSpeed = options.turnSpeed || 2.0;
-        this.fleeDistance = options.fleeDistance || 8.0;
+        this.fleeDistance = (options.fleeDistance || 8.0) * this.profile.fleeMultiplier;
         this.fleeSpeed = options.fleeSpeed || 2.5;
-        this.wanderRadius = options.wanderRadius || 20.0;
+        this.wanderRadius = (options.wanderRadius || 20.0) * this.profile.wanderRadiusMult;
 
         // State
         this.state = CREATURE_STATE.IDLE;
         this.stateTimer = 0;
-        this.stateDuration = 2.0; // How long to stay in current state
+        this.stateDuration = 2.0;
 
         // Position / movement
         this.posX = 0;
         this.posZ = 0;
         this.targetX = 0;
         this.targetZ = 0;
-        this.facing = 0; // Radians (Y rotation)
+        this.facing = 0;
         this.targetFacing = 0;
         this.spawnX = 0;
         this.spawnZ = 0;
 
+        // Biome tracking
+        this.spawnBiome = options.spawnBiome || null;
+        this.getBiomeAt = options.getBiomeAt || null;
+
         // Animation state
-        this.walkCycle = 0; // 0-1 repeating for leg animation
+        this.walkCycle = 0;
         this.headBob = 0;
 
         // Seeded RNG for deterministic behavior
         this._seed = options.seed || 0;
         this._rngCounter = 0;
+
+        // Curious state tracking
+        this._curiousApproachDist = 5 + (this._seed % 5); // How close to get
+        this._curiousRetreatDist = 3;
     }
 
     _rng() {
@@ -126,6 +179,12 @@ export class CreatureAI {
             case CREATURE_STATE.GRAZE:
                 this._updateGraze(dt);
                 break;
+            case CREATURE_STATE.CURIOUS:
+                this._updateCurious(dt, playerX, playerZ);
+                break;
+            case CREATURE_STATE.HERD:
+                this._updateHerd(dt);
+                break;
         }
 
         // Smooth rotation toward target facing
@@ -154,16 +213,34 @@ export class CreatureAI {
         this.headBob = Math.sin(this.stateTimer * 0.5) * 0.02;
 
         if (this.stateTimer >= this.stateDuration) {
-            // Transition: 50% wander, 30% graze, 20% stay idle
+            // Transition based on Wolfram class profile weights
+            const p = this.profile;
             const roll = this._rng();
-            if (roll < 0.5) {
+            let cumulative = 0;
+
+            cumulative += p.wanderWeight;
+            if (roll < cumulative) {
                 this._enterWander();
-            } else if (roll < 0.8) {
-                this._enterGraze();
-            } else {
-                this.stateTimer = 0;
-                this.stateDuration = 1.0 + this._rng() * 3.0;
+                return;
             }
+            cumulative += p.grazeWeight;
+            if (roll < cumulative) {
+                this._enterGraze();
+                return;
+            }
+            cumulative += p.curiousWeight || 0;
+            if (roll < cumulative) {
+                this._enterCurious();
+                return;
+            }
+            cumulative += p.herdWeight || 0;
+            if (roll < cumulative) {
+                this._enterHerd();
+                return;
+            }
+            // Remain idle
+            this.stateTimer = 0;
+            this.stateDuration = p.idleDurationMin + this._rng() * (p.idleDurationMax - p.idleDurationMin);
         }
     }
 
@@ -173,10 +250,35 @@ export class CreatureAI {
         this.stateDuration = 3.0 + this._rng() * 5.0;
 
         // Pick random target within wander radius of spawn
-        const angle = this._rng() * Math.PI * 2;
-        const dist = this._rng() * this.wanderRadius;
-        this.targetX = this.spawnX + Math.cos(angle) * dist;
-        this.targetZ = this.spawnZ + Math.sin(angle) * dist;
+        // Try up to 3 times to stay in spawn biome
+        let bestX = this.spawnX;
+        let bestZ = this.spawnZ;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const angle = this._rng() * Math.PI * 2;
+            const dist = this._rng() * this.wanderRadius;
+            const tx = this.spawnX + Math.cos(angle) * dist;
+            const tz = this.spawnZ + Math.sin(angle) * dist;
+
+            // If we have biome tracking, prefer staying in spawn biome
+            if (this.getBiomeAt && this.spawnBiome !== null) {
+                const targetBiome = this.getBiomeAt(tx, tz);
+                if (targetBiome === this.spawnBiome) {
+                    bestX = tx;
+                    bestZ = tz;
+                    break;
+                }
+            } else {
+                bestX = tx;
+                bestZ = tz;
+                break;
+            }
+            // Keep trying, use last attempt as fallback
+            bestX = tx;
+            bestZ = tz;
+        }
+
+        this.targetX = bestX;
+        this.targetZ = bestZ;
 
         // Face toward target
         this.targetFacing = Math.atan2(
@@ -279,5 +381,90 @@ export class CreatureAI {
             this.stateTimer = 0;
             this.stateDuration = 1.0 + this._rng() * 2.0;
         }
+    }
+
+    // ============================================================
+    // CURIOUS — approaches player, then retreats (Class 4)
+    // ============================================================
+
+    _enterCurious() {
+        this.state = CREATURE_STATE.CURIOUS;
+        this.stateTimer = 0;
+        this.stateDuration = 4.0 + this._rng() * 4.0;
+    }
+
+    _updateCurious(dt, playerX, playerZ) {
+        const dx = playerX - this.posX;
+        const dz = playerZ - this.posZ;
+        const distToPlayer = Math.sqrt(dx * dx + dz * dz);
+
+        // Look at player
+        this.targetFacing = Math.atan2(dx, dz);
+
+        if (distToPlayer > this._curiousApproachDist) {
+            // Approach cautiously (half speed)
+            const speed = this.moveSpeed * 0.5 * dt;
+            const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+            this.posX += (dx / dist) * Math.min(speed, dist);
+            this.posZ += (dz / dist) * Math.min(speed, dist);
+            this.walkCycle = (this.walkCycle + dt * this.moveSpeed * 1.5) % 1.0;
+            this.headBob = Math.sin(this.walkCycle * Math.PI * 2) * 0.03;
+        } else if (distToPlayer < this._curiousRetreatDist) {
+            // Too close — back away slowly
+            const speed = this.moveSpeed * 0.3 * dt;
+            const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+            this.posX -= (dx / dist) * speed;
+            this.posZ -= (dz / dist) * speed;
+            this.walkCycle = (this.walkCycle + dt * this.moveSpeed * 1.0) % 1.0;
+        } else {
+            // Just stand and watch
+            this.walkCycle *= 0.9;
+            this.headBob = Math.sin(this.stateTimer * 1.5) * 0.03; // Tilting head
+        }
+
+        if (this.stateTimer >= this.stateDuration) {
+            this.state = CREATURE_STATE.IDLE;
+            this.stateTimer = 0;
+            this.stateDuration = 1.0 + this._rng() * 2.0;
+        }
+    }
+
+    // ============================================================
+    // HERD — moves toward a nearby herd position (Class 4)
+    // ============================================================
+
+    _enterHerd() {
+        this.state = CREATURE_STATE.HERD;
+        this.stateTimer = 0;
+        this.stateDuration = 3.0 + this._rng() * 4.0;
+
+        // Move toward a position between spawn and current position
+        // (simulates moving toward herd center)
+        const midX = (this.spawnX + this.posX) * 0.5 + (this._rng() - 0.5) * 8;
+        const midZ = (this.spawnZ + this.posZ) * 0.5 + (this._rng() - 0.5) * 8;
+        this.targetX = midX;
+        this.targetZ = midZ;
+        this.targetFacing = Math.atan2(this.targetX - this.posX, this.targetZ - this.posZ);
+    }
+
+    _updateHerd(dt) {
+        // Same movement as wander, just toward herd center
+        const dx = this.targetX - this.posX;
+        const dz = this.targetZ - this.posZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        if (dist < 1.0 || this.stateTimer >= this.stateDuration) {
+            this.state = CREATURE_STATE.IDLE;
+            this.stateTimer = 0;
+            this.stateDuration = 1.0 + this._rng() * 2.0;
+            return;
+        }
+
+        const speed = this.moveSpeed * 0.8 * dt;
+        this.posX += (dx / dist) * Math.min(speed, dist);
+        this.posZ += (dz / dist) * Math.min(speed, dist);
+        this.targetFacing = Math.atan2(dx, dz);
+        this.walkCycle = (this.walkCycle + dt * this.moveSpeed * 2.0) % 1.0;
+        this.headBob = Math.sin(this.walkCycle * Math.PI * 2) * 0.03;
     }
 }

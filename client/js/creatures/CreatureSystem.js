@@ -17,6 +17,7 @@
 
 import * as THREE from 'three';
 import { hashSeed, seededRandom } from '../generation/hashSeed.js';
+import { classifyRule } from '../generation/cellularAutomata.js';
 import { generatePlanetCreatures } from './CreatureGenerator.js';
 import { CreatureAI } from './CreatureAI.js';
 
@@ -81,6 +82,9 @@ export class CreatureSystem {
         this.planetSeed = options.planetSeed || 42;
         this.getHeightAt = options.getHeightAt || (() => 0);
         this.getBiomeAt = options.getBiomeAt || (() => 5); // Default: grassland
+
+        // Wolfram class for this planet (drives creature behavior)
+        this._wolframClass = classifyRule(this.planetRule).class;
 
         // Generate species templates for this planet
         this.speciesTemplates = generatePlanetCreatures(
@@ -215,7 +219,7 @@ export class CreatureSystem {
             mesh.rotation.y = rng() * Math.PI * 2;
             this.scene.add(mesh);
 
-            // Create AI
+            // Create AI with Wolfram class for archetype-specific behavior
             const ai = new CreatureAI({
                 moveSpeed: species.animParams.moveSpeed,
                 turnSpeed: species.animParams.turnSpeed,
@@ -223,6 +227,9 @@ export class CreatureSystem {
                 fleeSpeed: 2.0,
                 wanderRadius: 15 + rng() * 15,
                 seed: seed,
+                wolframClass: this._wolframClass,
+                spawnBiome: biomeId,
+                getBiomeAt: this.getBiomeAt,
             });
             ai.setPosition(spawnX, spawnZ);
 

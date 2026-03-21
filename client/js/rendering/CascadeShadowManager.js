@@ -102,6 +102,10 @@ export class CascadeShadowManager {
         // Reusable vectors to avoid per-frame allocations
         this._targetPos = new THREE.Vector3();
         this._lightOffset = new THREE.Vector3();
+
+        // Movement-based update optimization: skip recalculation when camera is stationary
+        this._lastUpdatePos = new THREE.Vector3(Infinity, Infinity, Infinity);
+        this._updateDistanceThreshold = 2.0; // meters — skip update if camera moved less
     }
 
     // ================================================================
@@ -184,6 +188,14 @@ export class CascadeShadowManager {
      */
     update(camera) {
         if (!this._enabled || this._cascadeLights.length === 0) return;
+
+        // Skip recalculation if camera hasn't moved significantly
+        const dx = camera.position.x - this._lastUpdatePos.x;
+        const dz = camera.position.z - this._lastUpdatePos.z;
+        if (dx * dx + dz * dz < this._updateDistanceThreshold * this._updateDistanceThreshold) {
+            return;
+        }
+        this._lastUpdatePos.set(camera.position.x, camera.position.y, camera.position.z);
 
         // Target position: where the camera is looking (at ground level)
         this._targetPos.set(camera.position.x, 0, camera.position.z);

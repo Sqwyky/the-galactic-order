@@ -56,6 +56,7 @@ export class VolumetricCloudPass extends Pass {
         this.density = options.density || 0.04;
         this.windDirection = options.windDirection || new THREE.Vector2(1.0, 0.3);
         this.windSpeed = options.windSpeed || 8.0;
+        this._renderScale = 1.0; // Quality-dependent render resolution scale
 
         this._material = new THREE.ShaderMaterial({
             uniforms: {
@@ -76,6 +77,7 @@ export class VolumetricCloudPass extends Pass {
                 uWindOffset: { value: new THREE.Vector2() },
                 uTime: { value: 0.0 },
                 uResolution: { value: new THREE.Vector2() },
+                uFBMOctaves: { value: 5 },
             },
             vertexShader: /* glsl */ `
                 varying vec2 vUv;
@@ -104,6 +106,7 @@ export class VolumetricCloudPass extends Pass {
                 uniform vec2 uWindOffset;
                 uniform float uTime;
                 uniform vec2 uResolution;
+                uniform int uFBMOctaves;
 
                 varying vec2 vUv;
 
@@ -158,11 +161,12 @@ export class VolumetricCloudPass extends Pass {
                     return sqrt(minDist);
                 }
 
-                // FBM for cloud base shape
+                // FBM for cloud base shape (octave count driven by quality tier)
                 float cloudFBM(vec3 p) {
                     float v = 0.0;
                     float amp = 0.5;
                     for (int i = 0; i < 5; i++) {
+                        if (i >= uFBMOctaves) break;
                         v += amp * valueNoise3D(p);
                         p *= 2.03;
                         amp *= 0.47;
@@ -388,13 +392,22 @@ export class VolumetricCloudPass extends Pass {
     }
 
     setQuality(tier) {
-        // Adjust step count based on quality tier
-        // This is handled via the step count in shader (fixed at 32 max)
-        // On lower tiers, we reduce cloud detail or disable entirely
         if (tier === 'low' || tier === 'potato') {
             this.enabled = false;
         } else {
             this.enabled = true;
+            // Reduce FBM octaves on lower tiers for performance
+            if (tier === 'ultra') {
+                this._material.uniforms.uFBMOctaves.value = 5;
+                this._renderScale = 1.0;
+            } else if (tier === 'high') {
+                this._material.uniforms.uFBMOctaves.value = 4;
+                this._renderScale = 0.75;
+            } else {
+                // medium
+                this._material.uniforms.uFBMOctaves.value = 3;
+                this._renderScale = 0.5;
+            }
         }
     }
 
@@ -442,7 +455,8 @@ export class VolumetricCloudPass extends Pass {
         uniforms.uCloudTop.value = this.cloudTop;
         uniforms.uCoverage.value = this.coverage;
         uniforms.uDensity.value = this.density;
-        uniforms.uResolution.value.set(readBuffer.width, readBuffer.height);
+        const scale = this._renderScale || 1.0;
+        uniforms.uResolution.value.set(readBuffer.width * scale, readBuffer.height * scale);
 
         if (this.renderToScreen) {
             renderer.setRenderTarget(null);

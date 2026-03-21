@@ -158,6 +158,18 @@ export class FlightController {
         // Fuel system (Pioneer-inspired)
         this.fuel = this.config.maxFuel;
 
+        // Inventory integration (set via setInventory())
+        this._inventory = null;
+        this._fuelElementId = 'carbon';        // Carbon is fuel
+        this._fuelPerUnit = 25.0;              // Each carbon unit restores 25 fuel
+        this._autoRefuelThreshold = 10.0;      // Auto-consume carbon below this fuel level
+        this._lowFuelWarning = false;           // True when fuel < 20% and no carbon
+
+        // Collision feedback
+        this._collisionShake = 0;              // Screen shake intensity (decays over time)
+        this._collisionShakeDecay = 5.0;       // Shake decay rate per second
+        this._lastCollisionTime = 0;           // Prevent repeated collision audio
+
         // Thruster spool states (0 = off, 1 = full)
         // Pioneer models individual thruster response times
         this.thrusterStates = {
@@ -552,6 +564,9 @@ export class FlightController {
         // Consume fuel
         this.fuel = Math.max(0, this.fuel - fuelBurn * dt);
 
+        // Auto-refuel from inventory when running low
+        this._tryAutoRefuel();
+
         // Pioneer-style drag — very light in space, heavier in atmosphere
         // This simulates atmospheric drag for low-altitude flight
         const dragFactor = Math.pow(1 - this.config.linearDrag, dt);
@@ -593,10 +608,39 @@ export class FlightController {
         const minY = groundH + this.config.minAltitude;
 
         if (pos.y < minY) {
+            // Calculate impact severity from downward speed
+            const impactSpeed = Math.abs(Math.min(0, this.velocity.y));
+
             pos.y = minY;
             if (this.velocity.y < 0) {
+                // Bounce with energy loss
                 this.velocity.y = Math.abs(this.velocity.y) * 0.3;
+
+                // Collision feedback: screen shake proportional to impact
+                if (impactSpeed > 2.0) {
+                    const now = performance.now() / 1000;
+                    const shakeIntensity = Math.min(1.0, (impactSpeed - 2.0) / 15.0);
+                    this._collisionShake = Math.max(this._collisionShake, shakeIntensity);
+
+                    // Emit collision event (for audio) — throttle to once per 0.5s
+                    if (now - this._lastCollisionTime > 0.5 && this._onCollision) {
+                        this._onCollision(shakeIntensity);
+                        this._lastCollisionTime = now;
+                    }
+                }
             }
+
+            // Scrub horizontal speed on hard ground contact
+            if (impactSpeed > 5.0) {
+                const scrubFactor = Math.max(0.5, 1.0 - (impactSpeed - 5.0) / 30.0);
+                this.velocity.x *= scrubFactor;
+                this.velocity.z *= scrubFactor;
+            }
+        }
+
+        // Decay screen shake
+        if (this._collisionShake > 0) {
+            this._collisionShake = Math.max(0, this._collisionShake - this._collisionShakeDecay * dt);
         }
     }
 
@@ -625,6 +669,13 @@ export class FlightController {
         }
 
         this.camera.position.copy(this.config.cockpitOffset);
+
+        // Apply collision screen shake on top of cockpit position
+        if (this._collisionShake > 0.001) {
+            const shakeAmt = this._collisionShake * 0.04;
+            this.camera.position.x += (Math.random() - 0.5) * shakeAmt;
+            this.camera.position.y += (Math.random() - 0.5) * shakeAmt;
+        }
     }
 
     // ============================================================
@@ -672,6 +723,48 @@ export class FlightController {
     }
 
     // ============================================================
+    // INVENTORY FUEL INTEGRATION
+    // ============================================================
+
+    /**
+     * Connect inventory for auto-refueling from carbon reserves.
+     * @param {import('../ui/InventoryManager.js').InventoryManager} inventory
+     */
+    setInventory(inventory) {
+        this._inventory = inventory;
+    }
+
+    /**
+     * Set collision callback (for audio feedback).
+     * @param {Function} callback - (intensity: 0-1) => void
+     */
+    setOnCollision(callback) {
+        this._onCollision = callback;
+    }
+
+    /**
+     * Try to refuel from inventory carbon when fuel is low.
+     * Called each frame from _updateThrust when fuel drops below threshold.
+     */
+    _tryAutoRefuel() {
+        if (!this._inventory) return;
+
+        if (this.fuel < this._autoRefuelThreshold) {
+            // Try to consume one unit of carbon for fuel
+            if (this._inventory.has(this._fuelElementId, 1)) {
+                this._inventory.remove(this._fuelElementId, 1);
+                this.fuel = Math.min(this.config.maxFuel, this.fuel + this._fuelPerUnit);
+                this._lowFuelWarning = false;
+            } else {
+                // No carbon left — warn player
+                this._lowFuelWarning = this.fuel < this.config.maxFuel * 0.2;
+            }
+        } else {
+            this._lowFuelWarning = false;
+        }
+    }
+
+    // ============================================================
     // UTILITY
     // ============================================================
 
@@ -692,6 +785,8 @@ export class FlightController {
             isLanding: this.isLanding,
             fuel: Math.round(this.fuel),
             maxFuel: this.config.maxFuel,
+            lowFuelWarning: this._lowFuelWarning,
+            collisionShake: this._collisionShake,
             // Thruster spool states for HUD visualization
             thrusters: { ...this.thrusterStates },
         };

@@ -24,12 +24,12 @@ export class AmbienceManager {
      * @param {AudioContext} ctx
      * @param {GainNode} output
      */
-    constructor(ctx, output) {
+    constructor(ctx, output, sharedNoiseBuffer) {
         this.ctx = ctx;
         this.output = output;
 
-        // Noise buffer (shared, 4 seconds of white noise)
-        this._noiseBuffer = this._createNoiseBuffer(4.0);
+        // Noise buffer (use shared if provided, otherwise create own)
+        this._noiseBuffer = sharedNoiseBuffer || this._createNoiseBuffer(4.0);
 
         // ---- Wind ----
         this._windSource = null;

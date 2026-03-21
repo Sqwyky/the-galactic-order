@@ -108,11 +108,15 @@ export class AudioSystem {
         this.shipGain.gain.value = AUDIO_CONFIG.shipVolume;
         this.shipGain.connect(this.masterGain);
 
-        // Create sub-systems
+        // Create shared noise buffers (avoids duplicating across subsystems)
+        this._sharedNoiseShort = this._createNoiseBuffer(0.5);
+        this._sharedNoiseLong = this._createNoiseBuffer(4.0);
+
+        // Create sub-systems with shared buffers
         this.synth = new ProceduralSynth(this.ctx, this.ambienceGain);
-        this.ambience = new AmbienceManager(this.ctx, this.ambienceGain);
-        this.sfx = new SFXManager(this.ctx, this.sfxGain);
-        this.shipAudio = new ShipAudio(this.ctx, this.shipGain);
+        this.ambience = new AmbienceManager(this.ctx, this.ambienceGain, this._sharedNoiseLong);
+        this.sfx = new SFXManager(this.ctx, this.sfxGain, this._sharedNoiseShort);
+        this.shipAudio = new ShipAudio(this.ctx, this.shipGain, this._sharedNoiseLong);
 
         // Listen for browser autoplay resume
         document.addEventListener('click', this._resumeHandler, { once: true });
@@ -258,6 +262,21 @@ export class AudioSystem {
 
     /** Play scanner pulse */
     scannerPulse() { if (this.sfx) this.sfx.scannerPulse(); }
+
+    // ============================================================
+    // SHARED NOISE BUFFER
+    // ============================================================
+
+    _createNoiseBuffer(duration) {
+        const sampleRate = this.ctx.sampleRate;
+        const length = sampleRate * duration;
+        const buffer = this.ctx.createBuffer(1, length, sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < length; i++) {
+            data[i] = Math.random() * 2 - 1;
+        }
+        return buffer;
+    }
 
     // ============================================================
     // VOLUME CONTROLS

@@ -45,7 +45,7 @@ export class SFXManager {
      * @param {AudioContext} ctx
      * @param {GainNode} output
      */
-    constructor(ctx, output) {
+    constructor(ctx, output, sharedNoiseBuffer) {
         this.ctx = ctx;
         this.output = output;
 
@@ -63,8 +63,8 @@ export class SFXManager {
         this._miningGain = null;
         this._isMining = false;
 
-        // Reusable noise buffer
-        this._noiseBuffer = this._createNoiseBuffer(0.3);
+        // Reusable noise buffer (use shared if provided)
+        this._noiseBuffer = sharedNoiseBuffer || this._createNoiseBuffer(0.3);
     }
 
     // ============================================================
@@ -345,12 +345,14 @@ export class SFXManager {
         }
 
         // Modulate mining beam pitch with heat
-        if (this._isMining && this._miningOsc && state.miningHeat !== undefined) {
+        if (this._isMining && this._miningOsc && this._miningOsc[0] && state.miningHeat !== undefined) {
             const heatPitch = 1.0 + state.miningHeat * 0.5; // pitch rises with heat
             const now = this.ctx.currentTime;
-            this._miningOsc[0].frequency.setTargetAtTime(
-                this._planetFreq * 2 * heatPitch, now, 0.1
-            );
+            try {
+                this._miningOsc[0].frequency.setTargetAtTime(
+                    this._planetFreq * 2 * heatPitch, now, 0.1
+                );
+            } catch (_) { /* oscillator may have been stopped */ }
         }
     }
 

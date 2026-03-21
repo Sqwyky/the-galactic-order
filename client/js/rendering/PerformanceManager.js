@@ -734,8 +734,13 @@ export class PerformanceManager {
         const tierName = TIER_NAMES[this.currentTier];
 
         if (this._taaPass) {
-            // TAA: enabled on ULTRA/HIGH/MEDIUM, disabled on LOW/POTATO
-            this._taaPass.setQuality(tierName.toLowerCase());
+            // TAA: enabled on ULTRA/HIGH/MEDIUM, disabled on LOW/POTATO (FXAA replaces it)
+            if (this.currentTier >= QUALITY_TIERS.LOW) {
+                this._taaPass.enabled = false;
+            } else {
+                this._taaPass.enabled = true;
+                this._taaPass.setQuality(tierName.toLowerCase());
+            }
         }
 
         if (this._ssrPass) {
@@ -749,8 +754,8 @@ export class PerformanceManager {
         }
 
         if (this._autoExposure) {
-            // Auto-exposure: always enabled (very cheap), but speed varies
-            this._autoExposure.enabled = true;
+            // Auto-exposure: enabled on ULTRA/HIGH/MEDIUM/LOW, disabled on POTATO
+            this._autoExposure.enabled = this.currentTier <= QUALITY_TIERS.LOW;
             this._autoExposure.adaptationSpeed = this.currentTier <= QUALITY_TIERS.HIGH ? 2.0 : 3.0;
         }
 
@@ -766,12 +771,17 @@ export class PerformanceManager {
         }
 
         if (this._atmospherePass) {
-            // Ray-marched atmosphere quality
-            if (this.currentTier <= QUALITY_TIERS.HIGH) {
+            // Ray-marched atmosphere: disabled on POTATO to meet ≤2 pass budget
+            if (this.currentTier >= QUALITY_TIERS.POTATO) {
+                this._atmospherePass.enabled = false;
+            } else if (this.currentTier <= QUALITY_TIERS.HIGH) {
+                this._atmospherePass.enabled = true;
                 this._atmospherePass.setQuality('high');
             } else if (this.currentTier === QUALITY_TIERS.MEDIUM) {
+                this._atmospherePass.enabled = true;
                 this._atmospherePass.setQuality('medium');
             } else {
+                this._atmospherePass.enabled = true;
                 this._atmospherePass.setQuality('low');
             }
         }

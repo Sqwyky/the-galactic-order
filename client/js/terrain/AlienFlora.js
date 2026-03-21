@@ -314,6 +314,7 @@ export class AlienFloraSystem {
             if (!desiredKeys.has(key)) {
                 for (const mesh of meshes) {
                     this.scene.remove(mesh);
+                    mesh.dispose(); // Free instanced mesh GPU resources
                 }
                 this.chunkMeshes.delete(key);
                 this.processedChunks.delete(key);
