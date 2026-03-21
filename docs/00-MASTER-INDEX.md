@@ -43,6 +43,7 @@ Each part of this design is a separate document. Together they form the complete
 | 08 | **Database & Player State** | Data models, player accounts, save system, universe persistence, API key storage (encrypted) | DONE | 0% (no database layer) |
 | 09 | **Project Structure & Tech Stack** | Directory layout, dependencies, build system, dev environment setup, deployment | DONE | ~50% (client structure matches, server structure doesn't exist) |
 | 10 | **Development Phases & Roadmap** | Phase-by-phase build order, MVP definition, milestones, what to build first | DONE | Phases 0-2 complete, Phase 3 partial |
+| 11 | **Living Economy & Infrastructure** | Self-coding AI pipeline, Oracle Cloud hosting, distributed GPU compute, $GALACTIC token, player reward system | DRAFT | 0% (design only) |
 
 ---
 
@@ -53,10 +54,12 @@ Each part of this design is a separate document. Together they form the complete
 - **Desktop-first** with eventual mobile consideration
 
 ### Tech Stack
-- **Frontend**: Three.js (WebGL 2.0), vanilla JS ES modules (no framework, no bundler)
-- **Backend**: Node.js static file server (Express/Socket.io planned for Phase 5-6)
-- **Database**: Not yet implemented (SQLite/PostgreSQL planned)
-- **AI**: Scaffolding only (Gemini API planned, not connected)
+- **Frontend**: Three.js (WebGL 2.0 + WebGPU), vanilla JS ES modules (no framework, no bundler)
+- **Backend**: Node.js on Oracle Cloud Free Tier (ARM Ampere, 4 cores, 24GB RAM)
+- **Database**: Oracle Autonomous DB (free tier) — player accounts, world state, economy
+- **AI**: Claude API for server-side content generation + WebLLM for in-browser NPC dialogue
+- **Compute**: WebGPU distributed AI inference network (player GPUs earn revenue)
+- **Blockchain**: $GALACTIC token on Base or Solana L2 (for player rewards/cash-out)
 - **Audio**: Not yet implemented (Web Audio API planned)
 
 ### Universe Generation
@@ -71,9 +74,17 @@ Each part of this design is a separate document. Together they form the complete
 - **Sync**: WebSocket for real-time, REST for persistence
 
 ### AI Integration
-- **Player-owned API keys** (no server cost for AI)
-- **In-lore introduction**: Players don't enter a key at signup - they encounter a "Mysterious Being" in-game who requests it
-- **Uses**: NPC dialogue, adaptive quests, terminal puzzle hints, unique lore generation
+- **Server-side**: Claude API agents generate new content continuously (quests, creatures, mechanics)
+- **Client-side**: WebLLM for NPC dialogue (zero server cost, runs on player GPU)
+- **Self-coding**: AI-generated code passes automated tests → hot-deployed to live game
+- **Evolutionary**: Player engagement metrics drive selection of best AI-generated content
+
+### Economy & Rewards
+- **Revenue source**: Distributed AI compute network (player GPUs run inference jobs for paying businesses)
+- **Token**: $GALACTIC on Base/Solana L2
+- **Zero developer cost**: All revenue from organic sources (GPU compute, cosmetics, API licensing)
+- **Player earnings**: GPU contribution (60%), task completion (25%), dev fund (10%), infra (5%)
+- **Opt-in everything**: GPU compute, wallet connection, ads are always optional
 
 ---
 
@@ -100,6 +111,7 @@ These will be ported to JavaScript and extended to 2D/3D for the game engine.
 4. Parts 04-08 are technical deep-dives into specific systems
 5. **Part 09** (Project Structure) tells you where every file goes
 6. **Part 10** (Roadmap) tells you what to build FIRST
+7. **Part 11** (Living Economy) describes the self-sustaining economy and infrastructure
 
 ---
 
