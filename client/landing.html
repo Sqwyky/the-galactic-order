@@ -258,6 +258,8 @@ import { WeaponSystem } from './js/ship/WeaponSystem.js';
 import { ScannerSystem } from './js/ship/ScannerSystem.js';
 import { HyperspaceSystem } from './js/ship/HyperspaceSystem.js';
 import { ShipHUD } from './js/ui/ShipHUD.js';
+import { PowerSystem } from './js/ship/systems/PowerSystem.js';
+import { DamageSystem } from './js/ship/systems/DamageSystem.js';
 
 // Mining & Crafting systems
 import { MiningSystem } from './js/terrain/MiningSystem.js';
@@ -273,6 +275,13 @@ import { CreatureSystem } from './js/creatures/CreatureSystem.js';
 // Audio system
 import { AudioSystem } from './js/audio/AudioSystem.js';
 
+// Terminal & AI systems
+import { TerminalSystem } from './js/terminal/TerminalSystem.js';
+import { GeminiService } from './js/ai/GeminiService.js';
+
+// Game Manager (replaces inline game loop)
+import { GameManager } from './js/core/GameManager.js';
+
 // Post-processing pipeline (encapsulates all passes)
 import { PostProcessingPipeline } from './js/rendering/PostProcessingPipeline.js';
 
@@ -283,7 +292,6 @@ import { WeatherSystem, WEATHER_STATE } from './js/rendering/WeatherSystem.js';
 import { ResolutionScaler } from './js/rendering/ResolutionScaler.js';
 import { eventBus } from './js/core/EventBus.js';
 import { PlanetTransition } from './js/core/PlanetTransition.js';
-import { GameEngine } from './js/core/GameEngine.js';
 
 // ============================================================
 // URL PARAMS — planet identity
@@ -305,16 +313,9 @@ function setLoading(pct, msg) {
 }
 
 // ============================================================
-// LANDING PHASES (managed via GameEngine)
+// GAME STATE (managed by GameManager)
 // ============================================================
-const PHASE = {
-    DESCENT: 'descent',   // Flying down through atmosphere
-    LANDING: 'landing',   // Final approach to ground
-    SURFACE: 'surface',   // Walking on the surface
-    FLIGHT: 'flight',     // Flying ship
-};
-const gameEngine = new GameEngine();
-let currentPhase = PHASE.DESCENT;
+let currentPhase = 'DESCENT'; // Kept for backward compat, synced by GameManager
 
 // ============================================================
 // RENDERER
@@ -569,9 +570,16 @@ const walker = new WalkingController(camera, canvas, (x, z) => {
 // TABLET UI
 // ============================================================
 const tablet = new TabletUI({
-    onKeySubmit: (key) => {
-        tablet.addDiscovery('Key of Insight accepted. The Architect awakens...', 'encounter');
-        console.log('[TGO] Gemini API key provided (placeholder for API integration)');
+    onKeySubmit: async (key) => {
+        tablet.addDiscovery('Validating Key of Insight...', 'encounter');
+        const valid = await geminiService.setKey(key);
+        if (valid) {
+            tablet.addDiscovery('Key of Insight accepted. The Architect awakens...', 'encounter');
+            console.log('[TGO] Gemini API key validated — AI dialogue enabled');
+        } else {
+            tablet.addDiscovery('Key rejected. The Architect remains silent.', 'encounter');
+            console.warn('[TGO] Gemini API key validation failed');
+        }
     },
     planetData: {
         name: planetName,
@@ -735,6 +743,46 @@ const hyperspaceSystem = new HyperspaceSystem(scene, camera);
 // Ship HUD
 const shipHUD = new ShipHUD();
 
+// Power system — FTL-style reactor distribution
+const powerSystem = new PowerSystem(10); // 10 total bars
+
+// Damage system — hull + shields + component health
+const damageSystem = new DamageSystem({ hull: 100, shields: 50 });
+
+// ============================================================
+// TERMINAL SYSTEM — cipher puzzle
+// ============================================================
+const terminalSystem = new TerminalSystem({
+    targetRule: planetRule,
+    seed: planetSeed,
+});
+
+// Build terminal UI in the cipher tab of tablet
+setTimeout(() => {
+    const cipherPanel = document.querySelector('#tab-cipher');
+    if (cipherPanel) {
+        terminalSystem.buildUI(cipherPanel);
+    }
+}, 100);
+
+// ============================================================
+// GEMINI AI SERVICE — dynamic NPC dialogue
+// ============================================================
+const geminiService = new GeminiService();
+geminiService.setPlanetContext({
+    name: planetName,
+    rule: planetRule,
+    ruleClass: classification.class,
+    ruleLabel: classification.label,
+    atmosphere: planetMood.moodName,
+    frequency: `${planetFreq.frequency.toFixed(2)}Hz`,
+    musicalNote: planetNote.display,
+    brainwaveBand: planetMood.bandLabel,
+    mood: planetMood.moodName,
+    schumannResonant: planetMood.isSchumannResonant,
+    fragmentsFound: terminalSystem.getFragmentCount(),
+});
+
 // ============================================================
 // SEAMLESS PLANET TRANSITION — registry-based framework
 // ============================================================
@@ -759,7 +807,7 @@ const planetTransition = new PlanetTransition(scene, camera, {
 // 1. Active systems — disable input handlers and HUD before any disposal
 planetTransition.register('activeSystems', {
     dispose: () => {
-        currentPhase = PHASE.DESCENT;
+        gameManager.resetDescent();
         walker.disable();
         miningSystem.disable();
         flightController.disable();
@@ -783,6 +831,28 @@ planetTransition.register('planetIdentity', {
         planetMood = planetData.mood;
         planetFreq = planetData.freq;
         planetNote = planetData.note;
+
+        // Sync planet identity to GameManager's systems object
+        systems.planetRule = planetRule;
+        systems.planetSeed = planetSeed;
+        systems.planetName = planetName;
+        systems.classification = classification;
+        systems.planetMood = planetMood;
+        systems.planetFreq = planetFreq;
+        systems.planetNote = planetNote;
+
+        // Update Gemini context for new planet
+        geminiService.setPlanetContext({
+            name: planetName, rule: planetRule,
+            ruleClass: classification.class, ruleLabel: classification.label,
+            atmosphere: planetMood.moodName,
+            frequency: `${planetFreq.frequency.toFixed(2)}Hz`,
+            musicalNote: planetNote.display,
+            brainwaveBand: planetMood.bandLabel,
+            mood: planetMood.moodName,
+            schumannResonant: planetMood.isSchumannResonant,
+            fragmentsFound: terminalSystem.getFragmentCount(),
+        });
 
         // Update URL so refresh works (no page reload)
         history.replaceState(null, '', `landing.html?rule=${planetData.rule}&seed=${planetData.seed}`);
@@ -818,6 +888,7 @@ planetTransition.register('terrain', {
             triplanarMaterial.uniforms.uSkyColor.value.copy(skyTopColor);
         }
         terrainManager.setTriplanarMaterial(triplanarMaterial);
+        systems.terrainManager = terrainManager; // Sync to GameManager
         return terrainManager;
     },
 });
@@ -833,6 +904,7 @@ planetTransition.register('grass', {
             fogDensity: moodFogDensity,
         });
         if (windField) grassSystem.setWindField(windField);
+        systems.grassSystem = grassSystem;
         return grassSystem;
     },
 });
@@ -847,6 +919,7 @@ planetTransition.register('rocks', {
             rockColor: new THREE.Color(0x8a7d6b),
             fogColor: fogColor,
         });
+        systems.rockScatter = rockScatter;
         return rockScatter;
     },
 });
@@ -863,6 +936,7 @@ planetTransition.register('flora', {
             windStrength: planetData.mood.atmosphere.windStrength,
         });
         if (windField) alienFlora.setWindField(windField);
+        systems.alienFlora = alienFlora;
         return alienFlora;
     },
 });
@@ -877,6 +951,7 @@ planetTransition.register('particles', {
             fogDensity: moodFogDensity,
             count: planetData.mood.atmosphere.particleCount,
         });
+        systems.atmosphericParticles = atmosphericParticles;
         return atmosphericParticles;
     },
 });
@@ -889,6 +964,7 @@ planetTransition.register('npcs', {
             seed: planetData.seed,
             rule: planetData.rule,
         }, (x, z) => terrainManager.getHeightAt(x, z));
+        systems.npcManager = npcManager;
         return npcManager;
     },
 });
@@ -908,6 +984,7 @@ planetTransition.register('creatures', {
             console.warn('[TGO] Creature system recreation failed:', e.message);
             creatureSystem = null;
         }
+        systems.creatureSystem = creatureSystem;
         return creatureSystem;
     },
 });
@@ -973,7 +1050,7 @@ planetTransition.register('sceneEnvironment', {
 planetTransition.register('uiAndState', {
     create: (planetData) => {
         // Reset encounter state
-        encounterState = 'waiting';
+        setEncounterState('waiting');
         beingDialogueIndex = 0;
 
         // Update tablet with new planet data
@@ -1002,17 +1079,15 @@ planetTransition.register('uiAndState', {
             archetype: planetData.classification.label,
         });
 
-        // Reset descent state machine
-        descentProgress = 0;
-        descentLanded = false;
-        shipGrounded = false;
+        // Reset descent state machine (already reset by gameManager.resetDescent())
+        systems.shipGrounded = false;
 
         // Hide ship during descent (repositioned on landing)
         shipModel.group.visible = false;
         shipModel.setLandingGear(true);
 
         // Camera to descent start position
-        camera.position.set(0, descentStartHeight, 0);
+        camera.position.set(0, 200, 0);
         camera.lookAt(0, 0, 0);
 
         // Fade out flash → descent begins on next frame
@@ -1033,98 +1108,7 @@ hyperspaceSystem.onJump = (newRule, newSeed) => {
     planetTransition.execute(newRule, newSeed);
 };
 
-// World position helper (for when camera is child of ship)
-const _shipWorldPos = new THREE.Vector3();
-
-// E key — enter/exit ship
-function handleShipToggle() {
-    if (currentPhase === PHASE.SURFACE) {
-        // Check if near ship
-        const playerPos = camera.position;
-        const shipPos = shipModel.group.position;
-        const dist = playerPos.distanceTo(shipPos);
-
-        if (dist < 8) {
-            // Enter ship!
-            enterShip();
-        }
-    } else if (currentPhase === PHASE.FLIGHT) {
-        // Exit ship — start landing
-        exitShip();
-    }
-}
-
-function enterShip() {
-    currentPhase = PHASE.FLIGHT;
-    gameEngine.setPhase('FLIGHT');
-
-    // Disable walking
-    walker.disable();
-
-    miningSystem.disable();
-
-    // Hide walking HUD elements
-    document.getElementById('crosshair').classList.remove('visible');
-    document.getElementById('controls-hint').classList.remove('visible');
-    shipHUD.hideEnterPrompt();
-
-    // Enable flight systems
-    const shipPos = shipModel.group.position.clone();
-    shipPos.y += 5; // Lift off slightly
-    flightController.enable(shipPos);
-    weaponSystem.enable();
-    scannerSystem.enable();
-    hyperspaceSystem.enable();
-    shipHUD.show();
-
-    // Update phase HUD
-    document.getElementById('phaseName').textContent = 'FLIGHT MODE';
-    document.getElementById('phaseInfo').textContent = `${planetName} · Ship Active`;
-
-    console.log('[TGO] Entered ship — flight mode active');
-}
-
-function exitShip() {
-    // Start auto-landing sequence
-    flightController.startLanding(() => {
-        // Landing complete — switch to walking
-        currentPhase = PHASE.SURFACE;
-        gameEngine.setPhase('SURFACE');
-
-        // Disable flight systems
-        const landPos = flightController.disable();
-        weaponSystem.disable();
-        scannerSystem.disable();
-        hyperspaceSystem.disable();
-        shipHUD.hide();
-
-        // Enable walking at ship position
-        const groundH = terrainManager.getHeightAt(landPos.x, landPos.z) || 0;
-        const walkStart = new THREE.Vector3(landPos.x + 3, groundH + 1.7, landPos.z + 3);
-        walker.enable(walkStart);
-
-        miningSystem.enable();
-
-        // Show walking HUD
-        document.getElementById('crosshair').classList.add('visible');
-
-        // Update phase HUD
-        document.getElementById('phaseName').textContent = 'SURFACE EXPLORATION';
-        document.getElementById('phaseInfo').textContent = `${planetName} · Rule ${planetRule}`;
-
-        console.log('[TGO] Exited ship — surface exploration');
-    });
-}
-
-// Global E key listener (always active after landing)
-document.addEventListener('keydown', (e) => {
-    if (e.code === 'KeyE' && currentPhase !== PHASE.DESCENT) {
-        // Don't toggle during dialogue or tablet
-        if (dialogue && dialogue.isDialogueActive()) return;
-        if (tablet && tablet.isOpen) return;
-        handleShipToggle();
-    }
-});
+// Ship toggle and E key listener are now handled by GameManager
 
 // ============================================================
 // DIALOGUE SYSTEM
@@ -1132,12 +1116,18 @@ document.addEventListener('keydown', (e) => {
 let encounterState = 'waiting'; // waiting | approaching | talking | complete
 let beingDialogueIndex = 0;
 
+// Helper to keep encounterState in sync with systems object
+function setEncounterState(state) {
+    encounterState = state;
+    if (typeof systems !== 'undefined') systems.encounterState = state;
+}
+
 const dialogue = new DialogueSystem({
     onDialogueComplete: () => {
         if (encounterState === 'talking') {
             beingDialogueIndex++;
             if (beingDialogueIndex >= BEING_DIALOGUES.length) {
-                encounterState = 'complete';
+                setEncounterState('complete');
                 // Unlock the key input on the tablet
                 tablet.unlockKeyInput();
                 tablet.addDiscovery(
@@ -1146,7 +1136,7 @@ const dialogue = new DialogueSystem({
                     'encounter'
                 );
             } else {
-                encounterState = 'approaching';
+                setEncounterState('approaching');
             }
         }
         // Re-enable walking
@@ -1175,7 +1165,7 @@ const dialogue = new DialogueSystem({
                 'Every mountain you see, every valley you walk through — all computed from that single number.',
             ], { speakerColor: '#88ffcc' });
         } else if (choiceId === 'leave') {
-            encounterState = 'complete';
+            setEncounterState('complete');
         }
     },
 });
@@ -1213,7 +1203,7 @@ const BEING_DIALOGUES = [
 function triggerBeingDialogue() {
     if (beingDialogueIndex >= BEING_DIALOGUES.length) return;
 
-    encounterState = 'talking';
+    setEncounterState('talking');
     const d = BEING_DIALOGUES[beingDialogueIndex];
 
     // Disable walking during dialogue
@@ -1235,159 +1225,7 @@ function triggerBeingDialogue() {
     }
 }
 
-// ============================================================
-// DESCENT ANIMATION
-// ============================================================
-let descentProgress = 0;
-const descentDuration = 6.0; // seconds
-const descentStartHeight = 300;
-const descentEndHeight = 15; // just above ground
-let descentLanded = false;
-
-function updateDescent(dt) {
-    descentProgress += dt / descentDuration;
-
-    if (descentProgress >= 1.0) {
-        descentProgress = 1.0;
-        if (!descentLanded) {
-            descentLanded = true;
-            onLanded();
-        }
-        return;
-    }
-
-    // Smooth descent curve (fast at start, slow at end)
-    const t = 1.0 - Math.pow(1.0 - descentProgress, 3);
-    const height = descentStartHeight * (1 - t) + descentEndHeight * t;
-
-    // Slight forward drift
-    const forwardDrift = t * 20;
-
-    // Camera shake during re-entry (strongest at start, fades as we slow down)
-    let shakeX = 0, shakeY = 0;
-    if (descentProgress < 0.6) {
-        const shakeIntensity = (1.0 - descentProgress / 0.6) * 1.5;
-        const shakeFreq = 15 + descentProgress * 20; // Gets faster, then calms
-        shakeX = Math.sin(descentProgress * shakeFreq * 6.28) * shakeIntensity *
-                 (0.5 + Math.sin(descentProgress * 47) * 0.5);
-        shakeY = Math.cos(descentProgress * shakeFreq * 5.13) * shakeIntensity * 0.6;
-    }
-
-    camera.position.set(
-        Math.sin(descentProgress * 0.5) * 5 + shakeX,
-        height + shakeY,
-        forwardDrift
-    );
-
-    // Look slightly ahead and down
-    const lookY = height * 0.3;
-    camera.lookAt(0, lookY, forwardDrift + 20);
-
-    // Atmosphere overlay intensity
-    const atmosOverlay = document.getElementById('atmos-overlay');
-    if (descentProgress < 0.3) {
-        // Re-entry glow (orange) — intense plasma heating effect
-        const baseIntensity = Math.sin(descentProgress / 0.3 * Math.PI) * 0.4;
-        // Flickering fire effect during re-entry
-        const flicker = 0.05 * Math.sin(descentProgress * 80) + 0.03 * Math.sin(descentProgress * 130);
-        const intensity = baseIntensity + flicker;
-        // Edge glow: orange center → red edges for realistic re-entry
-        atmosOverlay.style.background =
-            `radial-gradient(ellipse at center, ` +
-            `rgba(255,180,80,${intensity * 0.3}), ` +
-            `rgba(255,120,30,${intensity * 0.7}), ` +
-            `rgba(200,50,10,${intensity * 0.4}) 70%, ` +
-            `transparent)`;
-        atmosOverlay.style.opacity = 1;
-    } else if (descentProgress < 0.7) {
-        // Atmosphere haze (planet tint fading in)
-        const hazeIntensity = (descentProgress - 0.3) / 0.4 * 0.15;
-        atmosOverlay.style.background = atmosTint + hazeIntensity + ')';
-        atmosOverlay.style.opacity = 1;
-    } else {
-        atmosOverlay.style.opacity = 0;
-    }
-
-    // Altitude display
-    document.getElementById('altitudeValue').textContent =
-        `${Math.round(height)}m`;
-
-    // Update terrain around descent path
-    terrainManager.update(camera.position, camera, dt);
-    // Sky dome follows camera during descent too
-    skyDome.update(camera.position, descentProgress * descentDuration);
-    // Water waves animate during descent
-    terrainManager.updateWater(descentProgress * descentDuration, camera.position);
-    // Particles visible during descent
-    atmosphericParticles.update(camera.position, descentProgress * descentDuration);
-}
-
-// ============================================================
-// LANDING — transition to walking
-// ============================================================
-function onLanded() {
-    currentPhase = PHASE.SURFACE;
-    gameEngine.setPhase('SURFACE');
-
-    // Show planet name banner
-    const banner = document.getElementById('planet-banner');
-    document.getElementById('bannerName').textContent = planetName.toUpperCase();
-    document.getElementById('bannerSubtitle').textContent =
-        `Rule ${planetRule} · ${planetMood.bandLabel} ${planetMood.moodName} · ${planetFreq.frequency.toFixed(1)}Hz (${planetNote.display})` +
-        (planetMood.isSchumannResonant ? ' · ★ RESONANT' : '');
-    banner.classList.add('visible');
-
-    // Fade out banner after 3 seconds
-    setTimeout(() => {
-        banner.classList.remove('visible');
-    }, 4000);
-
-    // Show controls hint
-    setTimeout(() => {
-        document.getElementById('controls-hint').classList.add('visible');
-        document.getElementById('crosshair').classList.add('visible');
-    }, 1500);
-
-    // Hide controls hint after 8 seconds
-    setTimeout(() => {
-        document.getElementById('controls-hint').classList.remove('visible');
-    }, 9000);
-
-    // Find a good landing spot (get ground height at current position)
-    const groundH = terrainManager.getHeightAt(camera.position.x, camera.position.z) || 5;
-    const startPos = new THREE.Vector3(
-        camera.position.x,
-        groundH + 1.7,
-        camera.position.z
-    );
-
-    // Enable walking
-    walker.enable(startPos);
-
-    // Enable mining tool
-    miningSystem.enable();
-
-    // Update phase HUD
-    document.getElementById('phaseName').textContent = 'SURFACE EXPLORATION';
-    document.getElementById('phaseInfo').textContent =
-        `${planetName} · Rule ${planetRule}`;
-
-    // Position the ship on the ground near the player
-    const shipX = camera.position.x + shipSpawnOffset.x;
-    const shipZ = camera.position.z + shipSpawnOffset.z;
-    const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || groundH;
-    shipModel.group.position.set(shipX, shipGroundH + 2.5, shipZ);
-    shipModel.group.visible = true; // Ensure visible after hyperspace warp
-    shipGrounded = true;
-
-    // Spawn the Mysterious Being
-    setTimeout(() => {
-        npcManager.spawnMysteriousBeing();
-        tablet.addDiscovery(`Landed on ${planetName}. Surface exploration initiated.`);
-        tablet.addDiscovery(`Anomalous energy signature detected nearby...`);
-        tablet.addDiscovery(`Your ship — Voidmoth Mk-I — is parked nearby. Press E to board.`);
-    }, 2000);
-}
+// Descent, landing, and phase transitions are now handled by GameManager
 
 // ============================================================
 // RESIZE
@@ -1407,12 +1245,9 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// GAME LOOP
+// GAME MANAGER — structured game loop (replaces monolithic animate())
 // ============================================================
-const clock = new THREE.Clock();
-let frameCount = 0, lastFpsTime = 0;
-
-console.log('[TGO] Init: All systems ready, starting game loop...');
+console.log('[TGO] Init: All systems ready, creating GameManager...');
 setLoading(100, 'Entering atmosphere...');
 
 // Quick fade — the descent animation IS the loading experience
@@ -1421,277 +1256,111 @@ setTimeout(() => {
     setTimeout(() => { loadingEl.style.display = 'none'; }, 1200);
 }, 300);
 
-function animate() {
-    requestAnimationFrame(animate);
-    const dt = clock.getDelta();
-    const t = clock.getElapsedTime();
+// Collect all system instances into a single object for GameManager
+const systems = {
+    // Core
+    renderer,
+    scene,
+    camera,
 
-    // Phase-specific update
-    if (currentPhase === PHASE.DESCENT) {
-        updateDescent(dt);
-    } else if (currentPhase === PHASE.SURFACE) {
-        // Don't update walking during dialogue or tablet
-        if (!dialogue.isDialogueActive() && !tablet.isOpen) {
-            walker.update(dt);
-        }
-        terrainManager.update(camera.position, camera, dt);
+    // Terrain & Environment
+    terrainManager,
+    skyDome,
+    grassSystem,
+    rockScatter,
+    alienFlora,
+    atmosphericParticles,
+    groundFill,
+    windField,
+    weatherSystem,
+    triplanarMaterial,
 
-        // Sky dome follows camera
-        skyDome.update(camera.position, t);
+    // Player
+    walker,
+    miningSystem,
+    miningHUD,
+    inventory,
 
-        // Grass — populate terrain chunks near camera with instanced blades
-        grassSystem.update(terrainManager.chunks, camera.position, t);
+    // Ship
+    shipModel,
+    flightController,
+    weaponSystem,
+    scannerSystem,
+    hyperspaceSystem,
+    shipHUD,
+    powerSystem,
+    damageSystem,
 
-        // Rocks — scattered boulders for surface detail
-        rockScatter.update(terrainManager.chunks, camera.position);
+    // NPCs & Creatures
+    npcManager,
+    creatureSystem,
 
-        // Alien flora — crystal spires, mushroom trees, glowing stalks
-        alienFlora.update(terrainManager.chunks, camera.position, t);
+    // UI
+    dialogue,
+    tablet,
 
-        // Water — animated waves, specular highlights
-        terrainManager.updateWater(t, camera.position);
+    // Audio
+    audioSystem,
 
-        // Atmospheric particles — floating dust/pollen
-        atmosphericParticles.update(camera.position, t);
+    // Rendering pipeline
+    composer,
+    taaPass,
+    ssaoPass,
+    bloomPass,
+    ssrPass,
+    autoExposure,
+    volumetricClouds,
+    atmospherePass,
+    motionBlurPass,
+    dofPass,
+    contactShadowPass,
+    ssgiPass,
+    lensFlarePass,
+    lensDirtPass,
+    fxaaPass,
+    combinedGradePass,
+    perfManager,
+    csmManager,
 
-        // Mining system — beam, particles, crystal pickups
-        miningSystem.setMineableMeshes(
-            Array.from(rockScatter.rockChunks.values()),
-            Array.from(alienFlora.chunkMeshes.values()).flat()
-        );
-        miningSystem.update(dt);
-        miningHUD.update(dt);
+    // Lighting
+    sunLight,
+    ambientLight,
+    hemiLight,
 
-        // Update mining HUD
-        const miningInfo = miningSystem.getHUDInfo();
-        miningHUD.updateHeat(miningInfo.heatPct, miningInfo.isOverheated);
+    // Terminal & AI
+    terminalSystem,
+    geminiService,
 
-        // Update inventory display in tablet if open
-        if (tablet.isOpen) {
-            tablet.updateInventory();
-            tablet.updateRefinery();
-        }
+    // Planet identity (mutable — updated on planet transition)
+    planetName,
+    planetRule,
+    planetSeed,
+    planetMood,
+    planetFreq,
+    planetNote,
+    classification,
+    atmosTint,
 
-        // Update refinery process
-        inventory.updateRefinery(dt);
+    // State
+    shipGrounded,
+    encounterState,
 
-        // Ground fill follows camera (prevents seeing sky below terrain edges)
-        groundFill.position.x = camera.position.x;
-        groundFill.position.z = camera.position.z;
+    // Callbacks
+    triggerBeingDialogue,
+    shipGroundCallback: () => {
+        const shipX = camera.position.x + shipSpawnOffset.x;
+        const shipZ = camera.position.z + shipSpawnOffset.z;
+        const shipGroundH = terrainManager.getHeightAt(shipX, shipZ) || 5;
+        shipModel.group.position.set(shipX, shipGroundH + 2.5, shipZ);
+        shipModel.group.visible = true;
+        systems.shipGrounded = true;
+    },
+};
 
-        // Update NPCs
-        npcManager.update(dt, camera.position);
+const gameManager = new GameManager(systems);
+gameManager.start();
 
-        // Update alien creatures
-        if (creatureSystem) creatureSystem.update(dt, camera.position);
-
-        // Check Mysterious Being proximity
-        if (npcManager.mysteriousBeing && encounterState !== 'talking') {
-            const proximity = npcManager.checkMysteriousBeingProximity(camera.position);
-
-            if (proximity.inRange && encounterState !== 'complete') {
-                dialogue.hideProximityHint();
-                if (encounterState !== 'talking') {
-                    triggerBeingDialogue();
-                }
-            } else if (proximity.inGlowRange && encounterState === 'waiting') {
-                dialogue.showProximityHint();
-            } else {
-                dialogue.hideProximityHint();
-            }
-        }
-
-        // Update tablet coordinates
-        if (tablet.isOpen) {
-            tablet.setCoordinates(camera.position.x, camera.position.y, camera.position.z);
-        }
-
-        // Sun follows player for consistent lighting + shadow coverage
-        sunLight.position.set(
-            camera.position.x + 100,
-            80,
-            camera.position.z + 60
-        );
-        sunLight.target.position.set(
-            camera.position.x,
-            0,
-            camera.position.z
-        );
-        sunLight.target.updateMatrixWorld();
-
-        // ---- Audio update (surface) ----
-        const miningInfo2 = miningSystem.getHUDInfo();
-        audioSystem.update(dt, {
-            playerPos: camera.position,
-            isGrounded: walker.isGrounded,
-            isMoving: walker.velocity.x !== 0 || walker.velocity.z !== 0,
-            isSprinting: walker.isSprinting,
-            isMining: miningInfo2.isFiring,
-            miningHeat: miningInfo2.heatPct,
-            weatherState: weatherSystem ? weatherSystem.weather : 'clear',
-            windStrength: windField ? windField.baseStrength : 0.1,
-            altitude: camera.position.y,
-            oceanLevel: TERRAIN_CONFIG.waterLevel || 0,
-            biome: terrainManager.getBiomeAt ? terrainManager.getBiomeAt(camera.position.x, camera.position.z) : 'grassland',
-        });
-
-        // Check ship proximity (show "Press E" prompt)
-        if (shipGrounded) {
-            const distToShip = camera.position.distanceTo(shipModel.group.position);
-            if (distToShip < 8) {
-                shipHUD.showEnterPrompt();
-            } else {
-                shipHUD.hideEnterPrompt();
-            }
-        }
-
-        // HUD
-        const info = walker.getHUDInfo();
-        document.getElementById('altitudeValue').textContent =
-            `${info.y}m`;
-        document.getElementById('phaseInfo').textContent =
-            `X:${info.x} Z:${info.z} · ${info.speed}m/s${info.isSprinting ? ' · SPRINT' : ''}`;
-    } else if (currentPhase === PHASE.FLIGHT) {
-        // ---- FLIGHT PHASE ----
-        flightController.update(dt);
-
-        // Get ship world position for all terrain/rendering systems
-        flightController.getWorldPosition(_shipWorldPos);
-
-        // Terrain keeps generating around ship
-        terrainManager.update(_shipWorldPos, camera, dt);
-
-        // Sky dome follows ship
-        skyDome.update(_shipWorldPos, t);
-
-        // Vegetation + environment around ship
-        grassSystem.update(terrainManager.chunks, _shipWorldPos, t);
-        rockScatter.update(terrainManager.chunks, _shipWorldPos);
-        alienFlora.update(terrainManager.chunks, _shipWorldPos, t);
-
-        // Water
-        terrainManager.updateWater(t, _shipWorldPos);
-
-        // Particles
-        atmosphericParticles.update(_shipWorldPos, t);
-
-        // Ground fill
-        groundFill.position.x = _shipWorldPos.x;
-        groundFill.position.z = _shipWorldPos.z;
-
-        // Weapons
-        weaponSystem.update(dt);
-
-        // Scanner (with audio trigger)
-        const wasScanning = scannerSystem.isScanning;
-        scannerSystem.update(dt, _shipWorldPos);
-        if (!wasScanning && scannerSystem.isScanning) {
-            audioSystem.scannerPulse();
-        }
-
-        // Hyperspace
-        const flightInfo = flightController.getHUDInfo();
-        hyperspaceSystem.update(dt, flightInfo.altitude);
-
-        // Audio: hyperspace charge sound
-        if (hyperspaceSystem.isCharging) {
-            audioSystem.hyperspaceCharge(hyperspaceSystem.chargeProgress);
-        }
-
-        // Sun follows ship (shadow camera tracks too)
-        sunLight.position.set(
-            _shipWorldPos.x + 100,
-            80,
-            _shipWorldPos.z + 60
-        );
-        sunLight.target.position.set(_shipWorldPos.x, 0, _shipWorldPos.z);
-        sunLight.target.updateMatrixWorld();
-
-        // ---- Audio update (flight) ----
-        audioSystem.update(dt, {
-            playerPos: _shipWorldPos,
-            isGrounded: false,
-            isMoving: false,
-            isSprinting: false,
-            isMining: false,
-            miningHeat: 0,
-            weatherState: weatherSystem ? weatherSystem.weather : 'clear',
-            windStrength: windField ? windField.baseStrength : 0.1,
-            altitude: flightInfo.altitude,
-            oceanLevel: TERRAIN_CONFIG.waterLevel || 0,
-            shipThrottle: flightInfo.thrust || 0,
-            afterburner: flightInfo.isBoosting,
-            shipSpeed: flightInfo.speed,
-        });
-
-        // Ship HUD
-        shipHUD.update(flightInfo, weaponSystem.getHUDInfo());
-
-        // Walking-mode HUD shows flight stats
-        document.getElementById('altitudeValue').textContent =
-            `${flightInfo.altitude}m`;
-        document.getElementById('phaseInfo').textContent =
-            `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'}`;
-    }
-
-    // Update cascade shadow maps (tracks camera for all phases)
-    csmManager.update(camera);
-
-    // Update combined grade + film grain time uniform
-    if (combinedGradePass) combinedGradePass.uniforms.uTime.value = t;
-
-    // 2026 pipeline updates
-    if (volumetricClouds) volumetricClouds.updateWind(dt);
-    if (windField) windField.update(dt, camera.position);
-    if (triplanarMaterial && triplanarMaterial.uniforms) {
-        triplanarMaterial.uniforms.uTime.value = t;
-        // Sync cloud shadow wind offset from volumetric clouds
-        if (volumetricClouds) {
-            triplanarMaterial.uniforms.uCloudWindOffset.value.copy(volumetricClouds.windOffset);
-        }
-    }
-    // Sync atmosphere cloud occlusion wind offset
-    if (atmospherePass && volumetricClouds) {
-        atmospherePass.setCloudWindOffset(volumetricClouds.windOffset);
-    }
-    // Weather system update
-    if (weatherSystem) weatherSystem.update(dt, camera.position);
-
-    // Update lens flare sun screen position
-    if (lensFlarePass && lensFlarePass.enabled) {
-        const sunDir = new THREE.Vector3(0.5, 0.3, 0.4).normalize();
-        const sunWorldPos = camera.position.clone().add(sunDir.multiplyScalar(1000));
-        const sunNDC = sunWorldPos.project(camera);
-        // Convert NDC (-1..1) to UV (0..1)
-        lensFlarePass.setSunScreenPosition(
-            sunNDC.x * 0.5 + 0.5,
-            sunNDC.y * 0.5 + 0.5
-        );
-    }
-
-    // Render with full post-processing pipeline
-    // TAA jitter: offset camera projection before render, restore after
-    taaPass.applyJitter();
-    composer.render();
-    taaPass.restoreJitter();
-
-    // Performance manager — adaptive quality
-    perfManager.update(dt);
-
-    // FPS
-    frameCount++;
-    if (t - lastFpsTime > 1) {
-        const fps = Math.round(frameCount / (t - lastFpsTime));
-        const stats = terrainManager.getStats();
-        document.getElementById('perf').textContent =
-            `${fps} FPS · ${perfManager.tierName} · ${stats.activeChunks} chunks (${stats.culledChunks || 0} culled) · LOD ${stats.lodBias?.toFixed(1) || '1.0'} · ${renderer.info.render.triangles} tris`;
-        frameCount = 0;
-        lastFpsTime = t;
-    }
-}
-
-// Start!
-animate();
+console.log('[TGO] GameManager started — all systems orchestrated');
 
 // Debug access (expose to window for testing)
 window._debug = {
@@ -1712,14 +1381,20 @@ window._debug = {
     get inventory() { return inventory; },
     get perf() { return perfManager; },
     get csm() { return csmManager; },
-    get phase() { return currentPhase; },
+    get phase() { return gameManager.currentPhase; },
     get weather() { return weatherSystem; },
     get lensFlare() { return lensFlarePass; },
     get lensDirt() { return lensDirtPass; },
     get resolution() { return resolutionScaler; },
+    get power() { return powerSystem; },
+    get damage() { return damageSystem; },
+    get terminal() { return terminalSystem; },
+    get gemini() { return geminiService; },
+    get gameManager() { return gameManager; },
     setWeather: (state) => weatherSystem && weatherSystem.setWeather(state),
     setResolution: (scale) => resolutionScaler && resolutionScaler.setScale(scale),
     warpTo: (rule, seed) => planetTransition.execute(rule, seed),
+    collectFragment: (id) => terminalSystem.collectFragment(id),
 };
 
 </script>

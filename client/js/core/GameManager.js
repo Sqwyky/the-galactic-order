@@ -183,12 +183,59 @@ export class GameManager {
                 }
             },
         });
+
+        // ---- NEW SYSTEMS: PowerSystem & DamageSystem ----
+
+        if (s.powerSystem) {
+            engine.register('power', s.powerSystem, {
+                phases: ['FLIGHT'],
+                priority: 29, // Before flight controller so multipliers are ready
+                update: () => {
+                    // Power system is event-driven, no per-frame update needed
+                    // But we read multipliers each frame for other systems
+                },
+            });
+        }
+
+        if (s.damageSystem) {
+            engine.register('damage', s.damageSystem, {
+                phases: ['FLIGHT'],
+                priority: 38,
+                update: (dt, t) => {
+                    const powerMult = s.powerSystem
+                        ? s.powerSystem.getMultiplier('shields') : 1.0;
+                    s.damageSystem.update(dt, t, powerMult);
+                },
+            });
+        }
+
+        // ---- Multiplayer sync ----
+
+        if (s.shipSyncManager) {
+            engine.register('multiplayer', s.shipSyncManager, {
+                phases: ['FLIGHT'],
+                priority: 90, // After all other systems
+                update: (dt) => {
+                    const localState = s.flightController
+                        ? { position: this._shipWorldPos.toArray(), rotation: [0, 0, 0, 1] }
+                        : null;
+                    const localSystems = (s.powerSystem && s.damageSystem)
+                        ? { power: s.powerSystem.getState(), damage: s.damageSystem.getState() }
+                        : null;
+                    s.shipSyncManager.update(dt, localState, localSystems);
+                },
+            });
+        }
     }
 
     _bindPhaseTransitions() {
         // E key — enter/exit ship
         document.addEventListener('keydown', (e) => {
             if (e.code === 'KeyE' && this.currentPhase !== 'DESCENT') {
+                // Don't toggle during dialogue or tablet
+                const s = this.s;
+                if (s.dialogue && s.dialogue.isDialogueActive()) return;
+                if (s.tablet && s.tablet.isOpen) return;
                 this.handleShipToggle();
             }
         });
@@ -349,6 +396,27 @@ export class GameManager {
         if (s.shipModel && s.shipGroundCallback) {
             s.shipGroundCallback();
         }
+
+        // Spawn NPC
+        if (s.npcManager) {
+            setTimeout(() => {
+                s.npcManager.spawnMysteriousBeing();
+                if (s.tablet) {
+                    s.tablet.addDiscovery(`Landed on ${s.planetName}. Surface exploration initiated.`);
+                    s.tablet.addDiscovery(`Anomalous energy signature detected nearby...`);
+                    s.tablet.addDiscovery(`Your ship is parked nearby. Press E to board.`);
+                }
+            }, 2000);
+        }
+    }
+
+    /**
+     * Reset descent state for a new planet (called during planet transition).
+     */
+    resetDescent() {
+        this.descentProgress = 0;
+        this.descentLanded = false;
+        this.currentPhase = 'DESCENT';
     }
 
     // ============================================================
@@ -450,7 +518,7 @@ export class GameManager {
         const s = this.s;
 
         // NPC proximity
-        if (s.npcManager.mysteriousBeing && s.encounterState !== 'talking') {
+        if (s.npcManager && s.npcManager.mysteriousBeing && s.encounterState !== 'talking') {
             const proximity = s.npcManager.checkMysteriousBeingProximity(s.camera.position);
             if (proximity.inRange && s.encounterState !== 'complete') {
                 s.dialogue.hideProximityHint();
@@ -520,8 +588,16 @@ export class GameManager {
             shipSpeed: flightInfo.speed,
         });
 
-        // Ship HUD
-        s.shipHUD.update(flightInfo, s.weaponSystem.getHUDInfo());
+        // Ship HUD — include power/damage info if available
+        const weaponInfo = s.weaponSystem.getHUDInfo();
+        if (s.powerSystem) {
+            weaponInfo.powerState = s.powerSystem.getState();
+        }
+        if (s.damageSystem) {
+            weaponInfo.damageState = s.damageSystem.getState();
+        }
+        s.shipHUD.update(flightInfo, weaponInfo);
+
         document.getElementById('altitudeValue').textContent = `${flightInfo.altitude}m`;
         document.getElementById('phaseInfo').textContent =
             `${flightInfo.speed}m/s · ${flightInfo.isBoosting ? 'BOOST' : 'CRUISE'}`;

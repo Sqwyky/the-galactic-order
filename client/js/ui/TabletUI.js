@@ -456,6 +456,76 @@ export class TabletUI {
             .refinery-ca-cell { width: 100%; aspect-ratio: 1; background: #111; }
             .refinery-ca-cell.on { background: #00ff88; }
 
+            /* Terminal puzzle styles */
+            .terminal-locked, .terminal-partial, .terminal-ready,
+            .terminal-cracked { text-align: center; padding: 20px 0; }
+            .terminal-icon { font-size: 48px; color: #223; margin-bottom: 12px; }
+            .terminal-status { color: #889; font-size: 13px; letter-spacing: 3px; margin-bottom: 12px; }
+            .terminal-progress { color: #556; font-size: 11px; letter-spacing: 2px; }
+            .terminal-bars { display: flex; gap: 8px; justify-content: center; margin: 16px 0; }
+            .frag-bar { color: #334; font-size: 20px; }
+            .frag-bar.filled { color: #00ff88; }
+            .terminal-fragments { text-align: left; margin: 16px 0; }
+            .frag-item { display: flex; justify-content: space-between; padding: 6px 0;
+                         border-bottom: 1px solid rgba(0,255,136,0.05); font-size: 11px; }
+            .frag-label { color: #667; }
+            .frag-row { color: #00ff88; font-family: 'Courier New', monospace; }
+            .frag-source { color: #445; font-style: italic; }
+            .terminal-hint { color: #445; font-size: 11px; line-height: 1.6; margin-top: 12px; }
+            .terminal-btn { background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3);
+                color: #00ff88; font-family: 'Courier New', monospace; font-size: 11px;
+                letter-spacing: 2px; padding: 10px 20px; cursor: pointer; margin-top: 16px;
+                transition: all 0.3s; }
+            .terminal-btn:hover { background: rgba(0,255,136,0.2); border-color: #00ff88; }
+            .stage-header { color: #00ff88; font-size: 12px; letter-spacing: 3px; margin-bottom: 12px;
+                border-bottom: 1px solid rgba(0,255,136,0.15); padding-bottom: 8px; }
+            .stage-desc { color: #556; font-size: 11px; line-height: 1.6; margin-bottom: 16px; }
+            .stage-feedback { color: #ff4444; font-size: 11px; margin-top: 12px; min-height: 16px; }
+            .stage1-frag { display: flex; justify-content: space-between; align-items: center;
+                padding: 8px 12px; margin: 4px 0; background: rgba(0,255,136,0.03);
+                border: 1px solid rgba(0,255,136,0.1); cursor: pointer; transition: all 0.2s; }
+            .stage1-frag:hover { border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.06); }
+            .frag-gen { color: #667; font-size: 10px; }
+            .frag-hint { color: #334; font-size: 9px; }
+            .hood-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+            .hood-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+            .hood-cells { display: flex; gap: 2px; }
+            .cell { display: inline-block; width: 20px; height: 20px; text-align: center; line-height: 20px;
+                font-size: 11px; border: 1px solid rgba(0,255,136,0.2); }
+            .cell.on { background: rgba(0,255,136,0.3); color: #00ff88; }
+            .cell.off { background: rgba(0,0,0,0.3); color: #445; }
+            .hood-arrow { color: #556; }
+            .hood-toggle { width: 30px; height: 24px; background: rgba(0,0,0,0.3);
+                border: 1px solid rgba(0,255,136,0.2); color: #889; cursor: pointer;
+                font-family: 'Courier New', monospace; font-size: 12px; transition: all 0.2s; }
+            .hood-toggle.on { background: rgba(0,255,136,0.2); color: #00ff88; border-color: #00ff88; }
+            .bits-display { display: flex; justify-content: center; gap: 4px; margin: 16px 0; }
+            .bit { display: inline-block; width: 28px; height: 28px; text-align: center; line-height: 28px;
+                font-size: 14px; color: #00ff88; background: rgba(0,255,136,0.1);
+                border: 1px solid rgba(0,255,136,0.3); }
+            .bits-labels { display: flex; justify-content: center; gap: 4px; margin-bottom: 16px; }
+            .bit-label { display: inline-block; width: 28px; text-align: center;
+                font-size: 8px; color: #445; }
+            .rule-input-row { display: flex; align-items: center; gap: 8px; justify-content: center; }
+            .rule-prompt { color: #667; font-size: 12px; }
+            .rule-input-row input { width: 80px; background: rgba(0,0,0,0.5);
+                border: 1px solid rgba(0,255,136,0.2); color: #00ff88;
+                font-family: 'Courier New', monospace; font-size: 14px; padding: 6px 10px;
+                text-align: center; outline: none; }
+            .rule-input-row input:focus { border-color: rgba(0,255,136,0.5); }
+            .cracked-reveal { margin: 20px 0; }
+            .cracked-label { color: #556; font-size: 12px; letter-spacing: 3px; display: block; margin-bottom: 8px; }
+            .cracked-rule { color: #00ff88; font-size: 48px; letter-spacing: 8px;
+                text-shadow: 0 0 30px rgba(0,255,136,0.5); }
+            .cracked-ca-display { margin: 16px auto; max-width: 400px; }
+            .ca-row { display: flex; justify-content: center; }
+            .ca-cell { width: 8px; height: 8px; }
+            .ca-cell.alive { background: #00ff88; }
+            .ca-cell.dead { background: rgba(0,255,136,0.05); }
+            .cracked-message { color: #556; font-size: 11px; line-height: 1.6; margin: 16px 0; }
+            .explorer-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(0,255,136,0.1); }
+            .explorer-input-row { display: flex; align-items: center; gap: 8px; justify-content: center; margin-bottom: 16px; }
+
             /* CRT effect */
             .tablet-frame::before {
                 content: '';

@@ -57,6 +57,29 @@ CREATE TABLE IF NOT EXISTS discoveries (
 CREATE INDEX IF NOT EXISTS idx_discoveries_type ON discoveries(discovery_type, universe_seed);
 CREATE INDEX IF NOT EXISTS idx_discoveries_player ON discoveries(player_id);
 
+-- Terminal puzzle state (cipher fragments + puzzle progress)
+CREATE TABLE IF NOT EXISTS terminal_state (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    target_rule INTEGER NOT NULL,
+    terminal_state TEXT DEFAULT 'LOCKED',  -- LOCKED, PARTIAL, READY, STAGE_1, etc.
+    collected_fragments TEXT DEFAULT '[]', -- JSON array of fragment IDs
+    puzzle_state TEXT DEFAULT '{}',        -- JSON puzzle progress
+    cracked_at  TEXT,
+    UNIQUE(player_id)
+);
+
+-- AI conversation context (Gemini Being dialogue history)
+CREATE TABLE IF NOT EXISTS ai_contexts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    conversation_history TEXT DEFAULT '[]', -- JSON array of { player, being } exchanges
+    total_messages INTEGER DEFAULT 0,
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(player_id)
+);
+
 -- Multiplayer sessions
 CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,    -- UUID

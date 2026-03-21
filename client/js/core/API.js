@@ -24,6 +24,8 @@
  *   api.sendUpdate({ position, rotation, phase });
  */
 
+import { eventBus } from './EventBus.js';
+
 const API_BASE = '/api';
 
 class API {
@@ -113,28 +115,43 @@ class API {
 
     // --- Multiplayer (Socket.io) ---
 
-    connectMultiplayer() {
+    async connectMultiplayer() {
         if (this._socket) return this._socket;
         if (!this._token) throw new Error('Must be logged in to connect multiplayer');
 
-        // Dynamically import socket.io client (loaded from CDN in HTML)
-        if (typeof io === 'undefined') {
-            console.warn('Socket.io client not loaded. Add socket.io CDN to HTML.');
-            return null;
+        // Dynamically import socket.io client
+        let ioFn;
+        if (typeof io !== 'undefined') {
+            ioFn = io;
+        } else {
+            try {
+                const mod = await import('https://cdn.jsdelivr.net/npm/socket.io-client@4/+esm');
+                ioFn = mod.io;
+            } catch (e) {
+                console.warn('[TGO] Socket.io client not available:', e.message);
+                return null;
+            }
         }
 
-        this._socket = io({
+        this._socket = ioFn({
             auth: { token: this._token },
+            transports: ['websocket', 'polling'],
         });
 
         this._socket.on('connect', () => {
-            console.log('Multiplayer connected');
+            console.log('[TGO] Multiplayer connected');
             this._emit('multiplayer:connected');
+            eventBus.emit('multiplayer:connected', {});
         });
 
-        this._socket.on('disconnect', () => {
-            console.log('Multiplayer disconnected');
-            this._emit('multiplayer:disconnected');
+        this._socket.on('disconnect', (reason) => {
+            console.log('[TGO] Multiplayer disconnected:', reason);
+            this._emit('multiplayer:disconnected', { reason });
+            eventBus.emit('multiplayer:disconnected', { reason });
+        });
+
+        this._socket.on('connect_error', (err) => {
+            console.warn('[TGO] Multiplayer connection error:', err.message);
         });
 
         // Forward server events to local listeners
