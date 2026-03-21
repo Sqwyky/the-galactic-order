@@ -92,13 +92,13 @@ Files to create:
 
 ### Definition of Done (Phase 0)
 
-- [ ] `applyRule(30, 1, 0, 0)` returns `1` (matches Python)
-- [ ] `runCA1D(30, 81, 50)` produces 50 rows of 81 cells
-- [ ] `hashSeed('galaxy', 0, 'system', 42)` returns same uint32 every time
-- [ ] Heightmap 256x256 generates in <50ms
-- [ ] Biome map produces 12 distinct biome types
-- [ ] All tests pass
-- [ ] No external dependencies (pure JavaScript)
+- [x] `applyRule(30, 1, 0, 0)` returns `1` (matches Python)
+- [x] `runCA1D(30, 81, 50)` produces 50 rows of 81 cells
+- [x] `hashSeed('galaxy', 0, 'system', 42)` returns same uint32 every time
+- [x] Heightmap 256x256 generates in <50ms
+- [x] Biome map produces 12 distinct biome types
+- [x] All tests pass
+- [x] No external dependencies (pure JavaScript)
 
 ---
 
@@ -168,16 +168,16 @@ Files to create:
 
 ### Definition of Done (Phase 1)
 
-- [ ] Open `localhost:3000` → see a 3D planet in space
-- [ ] Planet terrain is generated from a CA rule (not random noise)
-- [ ] Different rule numbers produce visibly different planets
-- [ ] Planet has colored biomes (green lowlands, brown mountains, white peaks)
-- [ ] Atmosphere glow visible from orbit
-- [ ] Can orbit around the planet with mouse
-- [ ] Can land on the planet surface
-- [ ] Can walk around on the surface with WASD + mouse
-- [ ] Character doesn't fall through terrain
-- [ ] 30+ FPS on a mid-range laptop
+- [x] Open `localhost:3000` → see a 3D planet in space
+- [x] Planet terrain is generated from a CA rule (not random noise)
+- [x] Different rule numbers produce visibly different planets
+- [x] Planet has colored biomes (green lowlands, brown mountains, white peaks)
+- [x] Atmosphere glow visible from orbit
+- [x] Can orbit around the planet with mouse
+- [x] Can land on the planet surface
+- [x] Can walk around on the surface with WASD + mouse
+- [x] Character doesn't fall through terrain
+- [x] 30+ FPS on a mid-range laptop
 
 ---
 
@@ -237,15 +237,15 @@ Files to create:
 
 ### Definition of Done (Phase 2)
 
-- [ ] Star system has 2-6 planets orbiting a star
-- [ ] Each planet is visually distinct (different CA rule, biome colors)
-- [ ] Can fly ship between planets
-- [ ] Can land on any planet and walk around
-- [ ] Can take off and return to space
-- [ ] Starfield visible in space
-- [ ] Star has emissive glow
-- [ ] Can warp to a different system (different seed → different planets)
-- [ ] Planet LOD switches smoothly (no pop-in)
+- [x] Star system has 2-6 planets orbiting a star
+- [x] Each planet is visually distinct (different CA rule, biome colors)
+- [x] Can fly ship between planets
+- [x] Can land on any planet and walk around
+- [x] Can take off and return to space
+- [x] Starfield visible in space
+- [x] Star has emissive glow
+- [x] Can warp to a different system (different seed → different planets)
+- [x] Planet LOD switches smoothly (no pop-in)
 
 ---
 
@@ -322,16 +322,16 @@ Files to create:
 
 ### Definition of Done (Phase 3)
 
-- [ ] Stats drain appropriately (oxygen on planets, energy when sprinting)
+- [x] Stats drain appropriately (oxygen on planets, energy when sprinting)
 - [ ] Can die (health reaches 0) and respawn
-- [ ] Resource nodes appear on planets, positioned deterministically
-- [ ] Can scan resources, flora, and terrain features
-- [ ] Can mine resources with the multi-tool
-- [ ] Items appear in inventory
+- [x] Resource nodes appear on planets, positioned deterministically
+- [x] Can scan resources, flora, and terrain features
+- [x] Can mine resources with the multi-tool
+- [x] Items appear in inventory
 - [ ] Can craft basic items (fuel cells, batteries, repair kits)
-- [ ] HUD shows all 4 stats, compass, and crosshair
-- [ ] Tablet opens with inventory and crafting tabs
-- [ ] Plants/trees visible on planet surfaces
+- [x] HUD shows all 4 stats, compass, and crosshair
+- [x] Tablet opens with inventory and crafting tabs
+- [x] Plants/trees visible on planet surfaces
 - [ ] Feels like a survival game loop: explore → gather → craft → survive
 
 ---
@@ -724,6 +724,24 @@ Files to create:
 - [ ] HTTPS working
 - [ ] Can handle 50+ concurrent players
 - [ ] Works in Chrome, Firefox, and Edge
+
+---
+
+## 10.11.1 Current Status Summary (March 2026)
+
+| Phase | Status | Completion |
+|-------|--------|------------|
+| Phase 0: Foundation | **COMPLETE** | 100% |
+| Phase 1: First Planet | **COMPLETE** | 100% |
+| Phase 2: Star Systems | **COMPLETE** | 100% |
+| Phase 3: Survival Game | **IN PROGRESS** | ~60% — mining, inventory, HUD done; crafting, death/respawn not done |
+| Phase 4: Quests & Terminal | **NOT STARTED** | 0% |
+| Phase 5: Accounts & Saves | **NOT STARTED** | 0% |
+| Phase 6: Multiplayer | **NOT STARTED** | 0% |
+| Phase 7: AI Integration | **SCAFFOLDING** | ~5% — NPC mesh and dialogue UI exist, no API calls |
+| Phase 8: Polish & Launch | **PARTIALLY DONE** | ~40% — rendering polish far exceeds plan, but no audio, no balance pass |
+
+**Notable:** The rendering/visual quality work planned for Phase 8 has been done ahead of schedule. The post-processing pipeline (25+ passes, 5 quality tiers, dynamic resolution scaling) far exceeds the original Phase 8 plan of "bloom, color grading, vignette."
 
 ---
 

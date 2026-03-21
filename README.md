@@ -1,6 +1,6 @@
 # The Galactic Order
 
-A web-based multiplayer space exploration game built on **Cellular Automata** and **fractal mathematics**, inspired by No Man's Sky. Every planet, creature, and mountain grows from Wolfram's 256 elementary rules.
+A web-based space exploration game built on **Cellular Automata** and **fractal mathematics**, inspired by No Man's Sky. Every planet, creature, and mountain grows from Wolfram's 256 elementary rules.
 
 **[Play Live Demo](https://sqwyky.github.io/the-galactic-order/client/landing.html?rule=30&seed=42)**
 
@@ -28,21 +28,34 @@ A web-based multiplayer space exploration game built on **Cellular Automata** an
 - Supershape rocks from CA rule
 - Instanced grass system
 - Atmospheric dust particles
-- Post-processing pipeline (SSAO, bloom, color grading, film grain)
+- 25+ post-processing passes (SSR, SSGI, TAA, FXAA, DOF, motion blur, contact shadows, lens flare, lens dirt, auto exposure, volumetric clouds, bloom, color grading, film grain)
+- Dynamic weather system with wind simulation
+- Adaptive performance manager (ULTRA/HIGH/MEDIUM/LOW/POTATO tiers)
+- Dynamic resolution scaling (0.25x to 2.0x)
+- PBR triplanar terrain material with subsurface scattering
+- Cascade shadow maps
+- Pioneer-style quadtree terrain LOD (5 levels, max 250 chunks)
+- Mining system with visual beam effects, resource crystals, deconstruction particles
 - The Mysterious Being NPC encounter + dialogue
 - In-game tablet (TAB) with planet data
 - Procedural planet naming
 - Ship flight (WASD + mouse steering, boost, free-look)
+- "Voidmoth" Mk-I ship with detailed geometry (hull plating, cockpit, nacelles, landing gear)
 - Weapons (laser + rockets with visual effects)
 - Environment scanner (C key)
 - Hyperspace jump to random planets (Space key)
-- Harmonic Resonance / Planet Mood system from Antigravity Brain integration
+- Harmonic Resonance / Planet Mood system
+- Procedural creature generation and AI behavior
+- Touch controls for mobile devices
 
-### In Progress
-- Gemini AI integration for NPC intelligence
-- Galaxy map / star system navigation
+### Planned (Not Yet Built)
+- AI-powered NPC dialogue (evaluating WebLLM for in-browser AI)
+- Quest system and main story line
+- Terminal cipher-breaking puzzle
+- Crafting system
+- Player accounts and save/load persistence
 - Multiplayer via WebSocket
-- Terminal cipher-breaking system
+- Audio system
 
 ## Controls
 
@@ -75,7 +88,7 @@ A web-based multiplayer space exploration game built on **Cellular Automata** an
 - **Backend**: Node.js static server
 - **Generation**: Wolfram CA engine, Gielis superformula, FNV-1a hashing
 - **Rendering**: Custom GLSL shaders, EffectComposer post-processing
-- **AI** (planned): Google Gemini API (player-provided keys)
+- **AI** (planned): In-browser via WebLLM (no server needed)
 - **Testing**: Vitest
 
 ## Architecture
@@ -83,18 +96,23 @@ A web-based multiplayer space exploration game built on **Cellular Automata** an
 ```
 client/
   js/
-    generation/     # CA engine, superformula, hashSeed, biomes, harmonics
-    rendering/      # Sky dome, atmosphere, particles, planet renderer
-    terrain/        # Terrain chunks, grass, rocks, flora, walking controller
-    ship/           # Flight controller, weapons, scanner, hyperspace
+    core/           # GameEngine, EventBus, PlanetTransition
+    generation/     # CA engine, superformula, hashSeed, biomes, harmonics (9 files)
+    rendering/      # 25+ files: sky, atmosphere, ocean, shadows, post-fx, perf manager
+    terrain/        # Quadtree terrain, grass, rocks, flora, walking, mining (12 files)
+    ship/           # Flight controller, weapons, scanner, hyperspace, ship model
+    creatures/      # Procedural creature generator, AI behavior
     npc/            # Mysterious Being NPC
-    ui/             # Dialogue, tablet, ship HUD
-    universe/       # Universe seed chain manager
+    ui/             # Dialogue, tablet, ship HUD, mining HUD, touch controls
+    universe/       # Universe seed chain manager, resonance orbit
   landing.html      # Main game entry point
+  planet.html       # Single-planet viewer
+  system.html       # Star system browser
+  index.html        # CA engine demo
 server/
-  index.js          # Static file server
+  index.js          # Static file server (simple HTTP, ~70 lines)
 docs/               # 10-part design document series
-tests/              # Vitest unit tests for generation engine
+tests/              # Vitest unit tests for generation engine (5 test files)
 ```
 
 ### Core Pipeline

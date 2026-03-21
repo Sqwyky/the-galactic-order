@@ -1175,6 +1175,139 @@ export class PerformanceMonitor {
 
 ---
 
+## Implementation Status
+
+> **Last updated:** March 2026
+
+### Actual vs Documented Structure
+
+The client-side structure is much richer than documented, while the server-side barely exists.
+
+**Client — 66 JavaScript files across 8 directories:**
+```
+client/js/
+├── core/               # Engine orchestration (3 files)
+│   ├── EventBus.js
+│   ├── GameEngine.js
+│   └── PlanetTransition.js
+├── creatures/          # Procedural creature system (3 files)
+│   ├── CreatureAI.js
+│   ├── CreatureGenerator.js
+│   └── CreatureSystem.js
+├── generation/         # CA engine & procedural generation (9 files)
+│   ├── cellularAutomata.js
+│   ├── hashSeed.js
+│   ├── heightmap.js
+│   ├── biomeMap.js
+│   ├── superformula.js
+│   ├── caShapeParams.js
+│   ├── harmonicResonance.js
+│   ├── HarmonicElements.js
+│   └── nameGenerator.js
+├── npc/                # NPC systems (1 file)
+│   └── NPCManager.js
+├── rendering/          # Graphics pipeline (25 files)
+│   ├── PlanetRenderer.js
+│   ├── SkyDome.js
+│   ├── OceanShader.js
+│   ├── AtmosphereShader.js
+│   ├── RayMarchedAtmosphere.js
+│   ├── TriplanarTerrainMaterial.js
+│   ├── VolumetricClouds.js
+│   ├── WeatherSystem.js
+│   ├── WindField.js
+│   ├── ProceduralEnvMap.js
+│   ├── AtmosphericParticles.js
+│   ├── PerformanceManager.js
+│   ├── CascadeShadowManager.js
+│   ├── AutoExposurePass.js
+│   ├── SSRPass.js
+│   ├── SSGIPass.js
+│   ├── MotionBlurPass.js
+│   ├── DOFPass.js
+│   ├── ContactShadowPass.js
+│   ├── TAAPass.js
+│   ├── FXAAPass.js
+│   ├── LensFlarePass.js
+│   ├── LensDirtPass.js
+│   ├── ResolutionScaler.js
+│   ├── FlightController.js
+│   └── shaders/CommonGLSL.js
+├── ship/               # Spaceship systems (5 files)
+│   ├── ShipModel.js
+│   ├── FlightController.js
+│   ├── WeaponSystem.js
+│   ├── ScannerSystem.js
+│   └── HyperspaceSystem.js
+├── terrain/            # Ground/surface systems (12 files)
+│   ├── TerrainChunk.js
+│   ├── TerrainWorker.js
+│   ├── QuadtreeNode.js
+│   ├── WalkingController.js
+│   ├── AlienFlora.js
+│   ├── GrassSystem.js
+│   ├── RockScatter.js
+│   ├── MiningSystem.js
+│   └── mining/
+│       ├── MiningConfig.js
+│       ├── MiningBeam.js
+│       ├── MiningTarget.js
+│       ├── ResourceCrystal.js
+│       └── DeconstructionEffect.js
+├── ui/                 # User interface (6 files)
+│   ├── TabletUI.js
+│   ├── ShipHUD.js
+│   ├── MiningHUD.js
+│   ├── DialogueSystem.js
+│   ├── InventoryManager.js
+│   └── TouchControls.js
+└── universe/           # Star system & universe (2 files)
+    ├── UniverseManager.js
+    └── ResonanceOrbit.js
+```
+
+**Server — 1 file:**
+```
+server/
+└── index.js            # Simple static file HTTP server (~70 lines)
+```
+The documented server structure (routes/, middleware/, services/, socket/, db/) does NOT exist.
+
+**Entry Points:**
+```
+client/
+├── landing.html        # Main game (72KB, primary entry point)
+├── planet.html         # Single-planet viewer
+├── system.html         # Star system browser
+└── index.html          # CA engine demo/tutorial
+```
+
+**Tests — 5 files:**
+```
+tests/client/
+├── cellularAutomata.test.js
+├── hashSeed.test.js
+├── heightmap.test.js
+├── biomeMap.test.js
+└── universeManager.test.js
+```
+
+**Key differences from documented structure:**
+- No `engine/` directory — replaced by `core/` and `rendering/`
+- No `world/` directory — split into `terrain/`, `universe/`, `generation/`
+- No `player/` directory — movement in `terrain/`, ship in `ship/`
+- No `gameplay/` directory — mining in `terrain/`, no crafting/quest code exists
+- No `ai/` directory — no Gemini integration code
+- No `network/` directory — no multiplayer code
+- No `terminal/` directory — terminal system not built
+- No `workers/` directory — TerrainWorker.js is in `terrain/`
+- `creatures/` directory exists (not in original doc)
+- `rendering/` has 25 files (doc described ~5)
+- No shader files in `client/shaders/` — shaders are inline in JS modules
+- No `.env`, no `knexfile.js`, no `migrations/`
+
+---
+
 ## Cross-References
 
 - **Part 02 (Fractal Foundation)**: `generation/` module contents, CA engine API
