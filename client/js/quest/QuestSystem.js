@@ -332,6 +332,23 @@ export class QuestSystem {
         }
     }
 
+    /**
+     * Reset for a new planet — clears quests and reselects from new seed.
+     * @param {number} newRule
+     * @param {number} newSeed
+     */
+    reset(newRule, newSeed) {
+        this.planetRule = newRule;
+        this.planetSeed = newSeed;
+        this.quests.clear();
+        this.state = {
+            playerY: 0, distanceFromOrigin: 0, totalMined: 0,
+            encounterState: 'waiting', scanCount: 0,
+            weatherChanged: false, creatureProximity: false,
+        };
+        this._selectQuests();
+    }
+
     dispose() {
         if (this._unsubs) {
             this._unsubs.forEach(fn => fn());

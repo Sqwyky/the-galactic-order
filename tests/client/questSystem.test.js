@@ -163,6 +163,27 @@ describe('QuestSystem', () => {
         });
     });
 
+    describe('reset', () => {
+        it('resets quests for new planet', () => {
+            qs.update({ encounterState: 'complete' });
+            expect(qs.getCompletedCount()).toBeGreaterThanOrEqual(1);
+
+            qs.reset(110, 999);
+            expect(qs.getCompletedCount()).toBe(0);
+            expect(qs.getAllQuests()).toHaveLength(5);
+            expect(qs.planetRule).toBe(110);
+            expect(qs.planetSeed).toBe(999);
+        });
+
+        it('generates different quests for different seed', () => {
+            const before = qs.getAllQuests().map(q => q.id).join(',');
+            qs.reset(110, 999);
+            const after = qs.getAllQuests().map(q => q.id).join(',');
+            // NPC quest is always first, but others differ
+            expect(after).not.toBe(before);
+        });
+    });
+
     describe('dispose', () => {
         it('cleans up event listeners', () => {
             qs.dispose();

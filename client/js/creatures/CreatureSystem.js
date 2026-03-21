@@ -262,6 +262,23 @@ export class CreatureSystem {
         this.creatures.splice(index, 1);
     }
 
+    /**
+     * Get distance to the closest creature from a position.
+     * @param {THREE.Vector3} position
+     * @returns {number} Distance in world units (Infinity if no creatures)
+     */
+    getClosestDistance(position) {
+        let minDist = Infinity;
+        for (const creature of this.creatures) {
+            if (!creature.alive) continue;
+            const dx = creature.mesh.position.x - position.x;
+            const dz = creature.mesh.position.z - position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < minDist) minDist = dist;
+        }
+        return minDist;
+    }
+
     // ============================================================
     // CLEANUP
     // ============================================================

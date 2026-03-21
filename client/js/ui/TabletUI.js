@@ -739,7 +739,7 @@ export class TabletUI {
             // Render existing saves
             let html = '';
             for (const save of saves) {
-                const date = save.updated_at ? new Date(save.updated_at).toLocaleString() : 'Unknown';
+                const date = (save.saved_at || save.updated_at) ? new Date(save.saved_at || save.updated_at).toLocaleString() : 'Unknown';
                 html += `<div class="save-slot" data-slot="${save.slot}">
                     <span class="slot-id">SLOT ${save.slot}</span>
                     <span class="slot-info">Rule ${save.system_rule || '?'} · ${date}</span>

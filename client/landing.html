@@ -726,8 +726,8 @@ try {
 // SHIP + FLIGHT SYSTEMS
 // ============================================================
 
-// Ship model — "Voidmoth" Mk-I starter ship
-const shipModel = new ShipModel({
+// Ship model — "Voidmoth" Mk-I starter ship (let: reassigned on ship class change)
+let shipModel = new ShipModel({
     hullColor: new THREE.Color(0x5a6577),
     accentColor: new THREE.Color(0xb83232),
     engineColor: new THREE.Color(0x33ddff),
@@ -916,6 +916,66 @@ function selectShipClass(classId) {
     const cls = SHIP_CLASSES[classId];
     if (!cls) return;
     console.log(`[TGO] Ship class selected: ${cls.name} (${classId})`);
+
+    // Remove old ship from scene
+    const oldPos = shipModel.group.position.clone();
+    const oldVisible = shipModel.group.visible;
+    shipModel.removeFromScene(scene);
+    shipModel.dispose();
+
+    // Rebuild with new class
+    const newShip = new ShipModel({
+        classId: classId,
+        hullColor: new THREE.Color(cls.visual?.defaultColors?.hull ?? 0x5a6577),
+        accentColor: new THREE.Color(cls.visual?.defaultColors?.accent ?? 0xb83232),
+        engineColor: new THREE.Color(cls.visual?.defaultColors?.engine ?? 0x33ddff),
+    });
+    newShip.setLandingGear(true);
+    newShip.group.position.copy(oldPos);
+    newShip.group.visible = oldVisible;
+    newShip.addToScene(scene);
+
+    // Replace references
+    shipModel = newShip;
+    systems.shipModel = shipModel;
+
+    // Update station manager for new class
+    const newStationPos = shipModel.getStationPositions();
+    try {
+        if (stationManager) stationManager.dispose();
+        stationManager = new StationManager(cls, newStationPos);
+        stationManager.setLocalPlayer('local');
+        stationManager.assignStation('pilot', 'local', 'Player');
+        systems.stationManager = stationManager;
+    } catch (e) {
+        console.warn('[TGO] StationManager rebuild failed:', e.message);
+    }
+
+    // Rebuild interior if walkable
+    if (shipInterior) {
+        shipInterior.dispose();
+        shipInterior = null;
+    }
+    if (cls.hasWalkableInterior) {
+        try {
+            shipInterior = new ShipInterior(shipModel.group, cls, newStationPos);
+            systems.shipInterior = shipInterior;
+        } catch (e) {
+            console.warn('[TGO] Interior rebuild failed:', e.message);
+        }
+    }
+    systems.shipInterior = shipInterior;
+
+    // Update flight controller reference
+    flightController.ship = shipModel;
+
+    // Update power/damage for new stats
+    powerSystem.reactorOutput = cls.stats.reactorOutput || 10;
+    damageSystem.maxHull = cls.stats.hull || 100;
+    damageSystem.maxShields = cls.stats.shields || 50;
+    damageSystem.hull = damageSystem.maxHull;
+    damageSystem.shields = damageSystem.maxShields;
+
     tablet.addDiscovery(`Ship class changed to ${cls.name} (${cls.class.toUpperCase()}).`, 'discovery');
     eventBus.emit('ship:classSelected', { classId, classData: cls });
 }
@@ -1236,6 +1296,11 @@ planetTransition.register('uiAndState', {
         // Reset encounter state
         setEncounterState('waiting');
         beingDialogueIndex = 0;
+
+        // Reset quest system for new planet
+        if (questSystem) {
+            questSystem.reset(planetData.rule, planetData.seed);
+        }
 
         // Update tablet with new planet data
         tablet.setPlanetData({
