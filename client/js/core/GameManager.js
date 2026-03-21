@@ -137,6 +137,24 @@ export class GameManager {
             },
         });
 
+        // Quest system — checks quest conditions each frame
+        if (s.questSystem) {
+            engine.register('quests', s.questSystem, {
+                phases: ['SURFACE'],
+                priority: 42,
+                update: (dt) => {
+                    const creatureProx = s.creatureSystem
+                        ? s.creatureSystem.getClosestDistance?.(s.camera.position) < 10
+                        : false;
+                    s.questSystem.update({
+                        playerPosition: s.camera.position,
+                        encounterState: s.encounterState,
+                        creatureProximity: creatureProx,
+                    });
+                },
+            });
+        }
+
         engine.register('creatures', s.creatureSystem, {
             phases: ['SURFACE'],
             priority: 45,
@@ -501,6 +519,15 @@ export class GameManager {
 
         // Performance
         s.perfManager.update(dt);
+
+        // Auto-save timer
+        if (s.autoSaveCallback) {
+            this._autoSaveTimer = (this._autoSaveTimer || 0) + dt;
+            if (this._autoSaveTimer >= 120) {
+                this._autoSaveTimer = 0;
+                s.autoSaveCallback();
+            }
+        }
 
         // FPS counter
         this._frameCount++;

@@ -279,6 +279,18 @@ import { AudioSystem } from './js/audio/AudioSystem.js';
 import { TerminalSystem } from './js/terminal/TerminalSystem.js';
 import { GeminiService } from './js/ai/GeminiService.js';
 
+// Quest system
+import { QuestSystem } from './js/quest/QuestSystem.js';
+
+// Ship interiors, crew, HUD
+import { HUDManager } from './js/ui/hud/HUDManager.js';
+import { StationManager } from './js/ship/crew/StationManager.js';
+import { ShipInterior } from './js/ship/interior/ShipInterior.js';
+import { SHIP_CLASSES } from './js/ship/ShipClassRegistry.js';
+
+// API client (save/load)
+import { api } from './js/core/API.js';
+
 // Game Manager (replaces inline game loop)
 import { GameManager } from './js/core/GameManager.js';
 
@@ -784,6 +796,138 @@ geminiService.setPlanetContext({
 });
 
 // ============================================================
+// QUEST SYSTEM — guides players to cipher fragments
+// ============================================================
+const questSystem = new QuestSystem({
+    planetRule: planetRule,
+    planetSeed: planetSeed,
+    terminalSystem: terminalSystem,
+    tablet: tablet,
+});
+
+// ============================================================
+// HUD MANAGER — role-aware HUD switcher
+// ============================================================
+let hudManager = null;
+try {
+    hudManager = new HUDManager();
+} catch (e) {
+    console.warn('[TGO] HUDManager disabled:', e.message);
+}
+
+// ============================================================
+// SHIP CLASS SELECTION UI
+// ============================================================
+function buildShipSelectionUI() {
+    const overlay = document.createElement('div');
+    overlay.id = 'ship-select-overlay';
+    overlay.style.cssText = `
+        display:none; position:fixed; inset:0; z-index:50;
+        background:rgba(0,2,4,0.95); backdrop-filter:blur(8px);
+    `;
+    const grid = document.createElement('div');
+    grid.style.cssText = `
+        display:grid; grid-template-columns:repeat(3,1fr); gap:16px;
+        max-width:800px; margin:60px auto; padding:24px;
+    `;
+    const title = document.createElement('h2');
+    title.textContent = 'SELECT SHIP CLASS';
+    title.style.cssText = `
+        color:#00ff88; font-family:'Courier New',monospace; text-align:center;
+        letter-spacing:6px; font-size:14px; margin:40px 0 0; grid-column:1/-1;
+    `;
+    grid.appendChild(title);
+
+    for (const [id, cls] of Object.entries(SHIP_CLASSES)) {
+        const card = document.createElement('div');
+        card.className = 'ship-card';
+        card.style.cssText = `
+            border:1px solid rgba(0,255,136,0.15); padding:16px; cursor:pointer;
+            transition:all 0.3s; background:rgba(0,10,5,0.6);
+        `;
+        card.innerHTML = `
+            <div style="color:#00ff88;font-family:'Courier New',monospace;font-size:12px;letter-spacing:2px;margin-bottom:8px">${cls.name.toUpperCase()}</div>
+            <div style="color:#667;font-family:'Courier New',monospace;font-size:10px">Class: ${cls.class.toUpperCase()} · Tier ${cls.tier}</div>
+            <div style="color:#556;font-family:'Courier New',monospace;font-size:10px;margin-top:4px">Crew: ${cls.crew.min}-${cls.crew.max} · Hull: ${cls.stats.hull} · Speed: ${cls.stats.speed}</div>
+            <div style="color:#445;font-family:'Courier New',monospace;font-size:9px;margin-top:4px">${cls.hasWalkableInterior ? '✦ Walkable Interior' : '○ Cockpit Only'}</div>
+        `;
+        card.addEventListener('mouseenter', () => {
+            card.style.borderColor = 'rgba(0,255,136,0.5)';
+            card.style.background = 'rgba(0,20,10,0.8)';
+        });
+        card.addEventListener('mouseleave', () => {
+            card.style.borderColor = 'rgba(0,255,136,0.15)';
+            card.style.background = 'rgba(0,10,5,0.6)';
+        });
+        card.addEventListener('click', () => {
+            overlay.style.display = 'none';
+            selectShipClass(id);
+        });
+        grid.appendChild(card);
+    }
+    overlay.appendChild(grid);
+    document.body.appendChild(overlay);
+    return overlay;
+}
+
+const shipSelectOverlay = buildShipSelectionUI();
+
+function selectShipClass(classId) {
+    const cls = SHIP_CLASSES[classId];
+    if (!cls) return;
+    console.log(`[TGO] Ship class selected: ${cls.name} (${classId})`);
+    tablet.addDiscovery(`Ship class changed to ${cls.name} (${cls.class.toUpperCase()}).`, 'discovery');
+    eventBus.emit('ship:classSelected', { classId, classData: cls });
+}
+
+// Press C to open ship selection (when on surface, near ship)
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey) {
+        if (shipSelectOverlay.style.display === 'none' && !tablet.isOpen) {
+            shipSelectOverlay.style.display = 'block';
+        } else {
+            shipSelectOverlay.style.display = 'none';
+        }
+    }
+});
+
+// ============================================================
+// AUTO-SAVE INTEGRATION
+// ============================================================
+let autoSaveTimer = 0;
+const AUTO_SAVE_INTERVAL = 120; // seconds
+
+function buildSaveState() {
+    return {
+        universe_seed: '42',
+        system_rule: planetRule,
+        planet_seed: planetSeed,
+        position_x: camera.position.x,
+        position_y: camera.position.y,
+        position_z: camera.position.z,
+        ship_fuel: flightController.fuel || 100,
+        inventory: JSON.stringify(inventory.getState ? inventory.getState() : {}),
+        quest_state: JSON.stringify(questSystem.getState()),
+        discovered_systems: JSON.stringify([]),
+    };
+}
+
+async function autoSave() {
+    if (!api.isLoggedIn) return;
+    try {
+        await api.save(0, buildSaveState());
+        console.log('[TGO] Auto-save complete');
+    } catch (e) {
+        console.warn('[TGO] Auto-save failed:', e.message);
+    }
+}
+
+// Auto-save on hyperspace jump
+eventBus.on('hyperspace:jumping', () => {
+    autoSave();
+});
+
+// ============================================================
 // SEAMLESS PLANET TRANSITION — registry-based framework
 // ============================================================
 // When the player jumps to a new planet via hyperspace, the
@@ -1201,6 +1345,11 @@ const BEING_DIALOGUES = [
 ];
 
 function triggerBeingDialogue() {
+    // If scripted dialogues exhausted but Gemini is active, use AI dialogue
+    if (beingDialogueIndex >= BEING_DIALOGUES.length && geminiService.isReady()) {
+        triggerAIDialogue();
+        return;
+    }
     if (beingDialogueIndex >= BEING_DIALOGUES.length) return;
 
     setEncounterState('talking');
@@ -1224,6 +1373,78 @@ function triggerBeingDialogue() {
         npcManager.mysteriousBeing.hasBeenApproached = true;
     }
 }
+
+/**
+ * AI-powered dialogue — uses Gemini to generate Being responses.
+ * Triggered after scripted dialogue is exhausted and API key validated.
+ */
+async function triggerAIDialogue() {
+    setEncounterState('talking');
+    walker.disable();
+
+    // Update fragment count in Gemini context
+    geminiService.setPlanetContext({
+        ...geminiService.planetContext,
+        fragmentsFound: terminalSystem.getFragmentCount(),
+    });
+
+    // Ask Gemini for a contextual greeting
+    const response = await geminiService.chat(
+        'The explorer approaches you again. Greet them and offer wisdom about this world.'
+    );
+
+    if (response) {
+        // Split long responses into multiple lines
+        const lines = response.match(/.{1,120}[.!?…]/g) || [response];
+        dialogue.startDialogue('THE BEING', lines, {
+            speakerColor: '#88ffcc',
+            choices: [
+                { text: 'Tell me about cipher fragments.', id: 'ai_fragments' },
+                { text: 'What should I explore next?', id: 'ai_quest' },
+                { text: 'I must go.', id: 'leave' },
+            ],
+        });
+    } else {
+        dialogue.startDialogue('THE BEING', [
+            'The cosmic winds are restless… the Architect\'s voice cannot reach me now.',
+            'Return when the Key of Insight burns brighter.',
+        ], { speakerColor: '#88ffcc' });
+    }
+}
+
+// Handle AI dialogue choices
+eventBus.on('gemini:validated', () => {
+    tablet.addDiscovery('The Architect awakens. The Being now speaks with cosmic wisdom.', 'encounter');
+});
+
+// Extend onChoice for AI-powered responses
+const originalOnChoice = dialogue.onChoice;
+dialogue.onChoice = async (choiceId, choice) => {
+    if (choiceId === 'ai_fragments' && geminiService.isReady()) {
+        walker.disable();
+        const resp = await geminiService.chat(
+            `The explorer asks about cipher fragments. They have ${terminalSystem.getFragmentCount()}/5. Guide them.`
+        );
+        if (resp) {
+            const lines = resp.match(/.{1,120}[.!?…]/g) || [resp];
+            dialogue.startDialogue('THE BEING', lines, { speakerColor: '#88ffcc' });
+        }
+        return;
+    }
+    if (choiceId === 'ai_quest' && geminiService.isReady()) {
+        walker.disable();
+        const resp = await geminiService.chat(
+            'The explorer wants guidance. Suggest what they should explore or do next on this planet.'
+        );
+        if (resp) {
+            const lines = resp.match(/.{1,120}[.!?…]/g) || [resp];
+            dialogue.startDialogue('THE BEING', lines, { speakerColor: '#88ffcc' });
+        }
+        return;
+    }
+    // Fall through to original handler
+    if (originalOnChoice) originalOnChoice(choiceId, choice);
+};
 
 // Descent, landing, and phase transitions are now handled by GameManager
 
@@ -1331,6 +1552,12 @@ const systems = {
     terminalSystem,
     geminiService,
 
+    // Quest system
+    questSystem,
+
+    // Ship crew/interior
+    hudManager,
+
     // Planet identity (mutable — updated on planet transition)
     planetName,
     planetRule,
@@ -1346,6 +1573,7 @@ const systems = {
     encounterState,
 
     // Callbacks
+    autoSaveCallback: autoSave,
     triggerBeingDialogue,
     shipGroundCallback: () => {
         const shipX = camera.position.x + shipSpawnOffset.x;
@@ -1391,10 +1619,16 @@ window._debug = {
     get terminal() { return terminalSystem; },
     get gemini() { return geminiService; },
     get gameManager() { return gameManager; },
+    get quests() { return questSystem; },
+    get hudManager() { return hudManager; },
+    get api() { return api; },
     setWeather: (state) => weatherSystem && weatherSystem.setWeather(state),
     setResolution: (scale) => resolutionScaler && resolutionScaler.setScale(scale),
     warpTo: (rule, seed) => planetTransition.execute(rule, seed),
     collectFragment: (id) => terminalSystem.collectFragment(id),
+    selectShip: (classId) => selectShipClass(classId),
+    showShipSelect: () => { shipSelectOverlay.style.display = 'block'; },
+    save: () => autoSave(),
 };
 
 </script>
