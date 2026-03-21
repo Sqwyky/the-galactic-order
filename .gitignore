@@ -6,3 +6,8 @@ nul
 .DS_Store
 Thumbs.db
 .claude/
+
+# Database files
+server/db/*.sqlite
+server/db/*.sqlite-wal
+server/db/*.sqlite-shm
