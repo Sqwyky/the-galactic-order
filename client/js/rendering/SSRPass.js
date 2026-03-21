@@ -229,8 +229,36 @@ export class SSRPass extends Pass {
         this._material.uniforms.uMaxDistance.value = this.maxDistance;
     }
 
+    /**
+     * Set sun direction for specular highlight on reflections.
+     * @param {THREE.Vector3} dir - Normalized sun direction
+     */
+    setSunDirection(dir) {
+        this._material.uniforms.uSunDirection.value.copy(dir);
+    }
+
+    /**
+     * Set sun color for reflection highlights.
+     * @param {THREE.Color} color
+     */
+    setSunColor(color) {
+        this._material.uniforms.uSunColor.value.copy(color);
+    }
+
+    /**
+     * Set sky color for fallback reflections.
+     * @param {THREE.Color} color
+     */
+    setSkyColor(color) {
+        this._material.uniforms.uSkyColor.value.copy(color);
+    }
+
+    /**
+     * No-op — SSR visual output is not affected by weather parameters.
+     * Reflections are driven by sun/sky color (setSunColor, setSkyColor)
+     * rather than weather state.
+     */
     setWeatherParams(params) {
-        // SSR doesn't respond to weather changes
     }
 
     render(renderer, writeBuffer, readBuffer) {

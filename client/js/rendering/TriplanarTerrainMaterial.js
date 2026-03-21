@@ -58,7 +58,7 @@ export function createTriplanarTerrainMaterial(options = {}) {
         skyColor = new THREE.Color(0x3366aa),
     } = options;
 
-    return new THREE.ShaderMaterial({
+    const material = new THREE.ShaderMaterial({
         uniforms: {
             uFogColor: { value: fogColor },
             uFogDensity: { value: fogDensity },

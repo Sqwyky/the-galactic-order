@@ -688,8 +688,8 @@ try {
         waterLevel: 0.0,
         skyColor: skyTopColor,
     });
-    ssrPass._material.uniforms.uSunDirection.value.copy(new THREE.Vector3(0.5, 0.3, 0.4).normalize());
-    ssrPass._material.uniforms.uSunColor.value.copy(sunColor);
+    ssrPass.setSunDirection(new THREE.Vector3(0.5, 0.3, 0.4).normalize());
+    ssrPass.setSunColor(sunColor);
     composer.addPass(ssrPass);
 } catch (e) {
     console.warn('[TGO] SSR disabled:', e.message);
@@ -1235,9 +1235,9 @@ planetTransition.register('sceneEnvironment', {
         }
 
         // SSR
-        if (ssrPass && ssrPass._material) {
-            ssrPass._material.uniforms.uSkyColor.value.copy(skyTopColor);
-            ssrPass._material.uniforms.uSunColor.value.copy(sunColor);
+        if (ssrPass) {
+            ssrPass.setSkyColor(skyTopColor);
+            ssrPass.setSunColor(sunColor);
         }
 
         // Wind field
